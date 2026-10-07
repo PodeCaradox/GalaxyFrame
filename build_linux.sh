@@ -34,7 +34,7 @@ if [ "$ARCH" = arm64 ]; then
   # executable bit kept (ANLEITUNG-STEAM-FRAME.md).
   rm -rf $BUILD/package
   mkdir -p $BUILD/package/GalaxyQuest
-  cp $BUILD/galaxyquest $BUILD/libopenxr_loader.so.1 $BUILD/libjsoncpp.so.26 LICENSE THIRD_PARTY_NOTICES.md ANLEITUNG-STEAM-FRAME.md \
+  cp $BUILD/galaxyquest $BUILD/libopenxr_loader.so.1 $BUILD/libjsoncpp.so.26 LICENSE THIRD_PARTY_NOTICES.md ANLEITUNG-STEAM-FRAME.md STEAM-FRAME.md \
     platform/linux/install.sh $BUILD/package/GalaxyQuest/
   # The disc converter for install.sh, as the converter zip holds it.
   python3 tools/package_converter.py $BUILD/converter.zip > /dev/null
