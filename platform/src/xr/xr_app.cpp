@@ -18,6 +18,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 
 #include <memory>
@@ -2195,6 +2196,9 @@ void runApp(App& a, const std::string& ext, const std::string& internal) {
         mkdir(gShotDir.c_str(), 0770);
     }
     vr::loadSettings((ext + "/petari_vr.ini").c_str());  // before the swapchains are sized
+#ifndef __ANDROID__
+    port_log("priority: nice %d (platform/linux/main.c)", getpriority(PRIO_PROCESS, 0));
+#endif
     initEgl(a);
     initInstance(a);
     initActions(a);

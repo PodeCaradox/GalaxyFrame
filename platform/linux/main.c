@@ -65,6 +65,17 @@ int main(int argc, char** argv) {
         files.rlim_cur = files.rlim_max;
         setrlimit(RLIMIT_NOFILE, &files);
     }
+    // SteamOS lets a game raise its priority (RLIMIT_NICE's hard limit is 28
+    // there: down to nice -8), so the frame loop keeps its refreshes while
+    // other apps want the same cores (a chat client took two of them).  Every
+    // thread started from here on inherits it.
+    struct rlimit nice;
+    if (getrlimit(RLIMIT_NICE, &nice) == 0 && nice.rlim_max > 20) {
+        nice.rlim_cur = nice.rlim_max;
+        if (setrlimit(RLIMIT_NICE, &nice) == 0) {
+            setpriority(PRIO_PROCESS, 0, 20 - (int)(nice.rlim_max > 40 ? 40 : nice.rlim_max));
+        }
+    }
     if (argc > 1 && strcmp(argv[1], "--headless") == 0) {
         return port_headless_main(argc - 1, argv + 1);
     }
