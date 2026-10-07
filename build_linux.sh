@@ -35,6 +35,7 @@ if [ "$ARCH" = arm64 ]; then
   rm -rf $BUILD/package
   mkdir -p $BUILD/package/GalaxyQuest
   cp $BUILD/galaxyquest $BUILD/libopenxr_loader.so.1 $BUILD/libjsoncpp.so.26 LICENSE THIRD_PARTY_NOTICES.md ANLEITUNG-STEAM-FRAME.md $BUILD/package/GalaxyQuest/
+  chmod 644 $BUILD/package/GalaxyQuest/*  # copies from a Windows drive come executable
   chmod 755 $BUILD/package/GalaxyQuest/galaxyquest
   tar -C $BUILD/package --owner=0 --group=0 -czf $BUILD/GalaxyQuest-SteamFrame-arm64.tar.gz GalaxyQuest
 fi

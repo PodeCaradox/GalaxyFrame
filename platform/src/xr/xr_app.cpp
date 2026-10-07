@@ -175,6 +175,7 @@ struct App {
     XrAction moveAction, lookAction, aAction, bAction, xAction, yAction, triggerAction, gripAction, menuAction, stickClickAction,
         aimPoseAction, hapticAction;
     XrAction dpadAction[4];  // up, down, left, right: the Steam Frame's left D-pad
+    XrAction longJumpAction;  // the Steam Frame's X: Z, then A
     XrPath handPath[2];
     XrSpace aimSpace[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
 
@@ -626,23 +627,22 @@ void suggest(App& a, const char* profile, bool touchPlus) {
 }
 
 // The Steam Frame's controllers: A, B, X and Y all sit on the right one, the
-// left has a D-pad and View.  The buttons keep their Touch roles (X and View
-// are -, Menu is +, B and Y spin), and the D-pad works as the right stick
-// does (updateInput).
+// left has a D-pad and View.  B and Y spin, X is the long jump, View alone
+// opens the pause menu (+; the right one's Menu does nothing), and the D-pad
+// works as the right stick does (updateInput).
 void suggestFrame(App& a) {
     std::vector<XrActionSuggestedBinding> b = {
         {a.moveAction, path(a, "/user/hand/left/input/thumbstick")},
         {a.lookAction, path(a, "/user/hand/right/input/thumbstick")},
         {a.aAction, path(a, "/user/hand/right/input/a/click")},
         {a.bAction, path(a, "/user/hand/right/input/b/click")},
-        {a.xAction, path(a, "/user/hand/right/input/x/click")},
-        {a.xAction, path(a, "/user/hand/left/input/view/click")},
+        {a.longJumpAction, path(a, "/user/hand/right/input/x/click")},
         {a.yAction, path(a, "/user/hand/right/input/y/click")},
         {a.triggerAction, path(a, "/user/hand/left/input/trigger/value")},
         {a.triggerAction, path(a, "/user/hand/right/input/trigger/value")},
         {a.gripAction, path(a, "/user/hand/left/input/squeeze/value")},
         {a.gripAction, path(a, "/user/hand/right/input/squeeze/value")},
-        {a.menuAction, path(a, "/user/hand/right/input/menu/click")},
+        {a.menuAction, path(a, "/user/hand/left/input/view/click")},
         {a.stickClickAction, path(a, "/user/hand/left/input/thumbstick/click")},
         {a.stickClickAction, path(a, "/user/hand/right/input/thumbstick/click")},
         {a.dpadAction[0], path(a, "/user/hand/left/input/dpad_up/click")},
@@ -683,6 +683,7 @@ void initActions(App& a) {
     a.dpadAction[1] = makeAction(a, "dpad_down", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
     a.dpadAction[2] = makeAction(a, "dpad_left", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
     a.dpadAction[3] = makeAction(a, "dpad_right", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
+    a.longJumpAction = makeAction(a, "long_jump", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
 
     if (a.hasTouchPlus) {
         suggest(a, "/interaction_profiles/meta/touch_controller_plus", true);
@@ -982,6 +983,18 @@ void updateInput(App& a, XrTime time) {
     // B or shake.
     if (getBool(a, a.menuAction)) pad.buttons |= W_PLUS;
     if (getBool(a, a.xAction)) pad.buttons |= W_MINUS;
+    // The long jump in one button: Z, and A once Z has held through a game
+    // frame (Mario::tryJump takes a jump with Z held while running as the
+    // long jump; standing, it is the backflip).
+    static int64_t longJumpAt = 0;
+    if (getBool(a, a.longJumpAction)) {
+        int64_t now = port_host_time_ns();
+        if (longJumpAt == 0) longJumpAt = now;
+        pad.buttons |= W_Z;
+        if (now - longJumpAt > 25000000) pad.buttons |= W_A;
+    } else {
+        longJumpAt = 0;
+    }
     if (getBool(a, a.stickClickAction, a.handPath[1])) pad.buttons |= W_UP;
     // Right stick: the D-pad.  In the diorama left/right turn it in steps
     // round Mario (a snap turn behind a blink; its yaw no longer follows the

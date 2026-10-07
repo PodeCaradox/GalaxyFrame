@@ -108,14 +108,16 @@ Danach in den *Eigenschaften* des neuen Eintrags:
 
 Zurück in den VR-Modus wechseln und GalaxyQuest aus der Bibliothek starten.
 
-## 5. 120 Hz einstellen (empfohlen)
+## 5. Bildwiederholrate
 
 Das Spiel läuft mit 60 Bildern pro Sekunde und zeigt jedes genau zwei
-Bildwechsel lang, wenn das Headset mit **120 Hz** läuft – dann ist das Bild
-am ruhigsten und die Grafikkarte hat pro Auge die meiste Zeit. Die
-Bildwiederholrate legt auf der Frame SteamVR fest (das Spiel kann sie dort
-nicht selbst wählen): in den SteamVR-Einstellungen unter *Video* bei den
-anwendungsspezifischen Einstellungen für GalaxyQuest 120 Hz wählen.
+Bildwechsel lang, wenn das Headset mit **120 Hz** läuft; beim zweiten dreht
+es das Bild auf die aktuelle Kopfhaltung nach. So ist das Bild am ruhigsten,
+und die Grafikkarte hat pro Auge die meiste Zeit. Das Spiel stellt 120 Hz
+beim Start selbst ein: es trägt die Rate in SteamVRs anwendungsspezifische
+Einstellungen ein (SteamVR → *Video*), dort lässt sie sich auch ändern.
+Andere Raten: Pausenmenü → VR-Einstellungen → *Refresh rate* (72, 90, 120,
+144 Hz).
 
 ## Steuerung (Frame-Controller)
 
@@ -123,16 +125,20 @@ anwendungsspezifischen Einstellungen für GalaxyQuest 120 Hz wählen.
 |---|---|---|
 | Linker Stick | Nunchuk-Stick | Laufen |
 | A | A | Springen, reden, bestätigen. Halten: Zwischensequenz oder Dialog überspringen |
-| B oder Y, oder einen Controller kurz schwingen oder aus dem Handgelenk drehen (rechts wie die Wii-Fernbedienung, links wie der Nunchuk) | Schütteln | Drehattacke |
+| Y (oder B) | Schütteln | Drehattacke |
+| X | Z halten + A | Beim Laufen Weitsprung, im Stand Rückwärtssalto |
 | Rechten Controller neigen | Wii-Fernbedienung neigen | Sternenkugel und Rochen-Surfen lenken |
 | Rechter Trigger | B | Sternenteile schießen, abbrechen |
 | Rechten Controller zielen | Pointer | Sternenteile sammeln, Zugsterne greifen, Menüs |
-| Linker Trigger | Z | Ducken, Stampfattacke, Weit- und Rückwärtssprung |
+| Linker Trigger | Z | Ducken; in der Luft Stampfattacke; gehalten mit A wie X |
 | Linke Griff-Taste | C | Kamera hinter Mario |
-| Menü (≡, rechts) | + | Pausenmenü mit den VR-Einstellungen |
-| X oder Ansicht (⧉, links) | − | Pausenmenü |
+| Ansicht (⧉, kleine Taste links) | + | Pausenmenü mit den VR-Einstellungen |
 | Rechter Stick oder linkes Steuerkreuz, links/rechts | Steuerkreuz | Ansicht um Mario drehen |
 | Rechter Stick oder linkes Steuerkreuz hoch, rechter Stick drücken | Steuerkreuz oben | Ego-Perspektive |
+
+Die Menü-Taste (≡) rechts ist frei. Die Drehattacke geht auch, wenn man
+einen Controller kurz schwingt oder aus dem Handgelenk dreht, aber nicht so
+zuverlässig wie mit Y.
 
 Ansicht neu ausrichten: mit SteamVRs eigenem „Ansicht zentrieren“ im
 System-Menü; das Spiel stellt Leinwand und Diorama dann vor dich.
@@ -163,7 +169,9 @@ Hinweis zum Handgelenksriemen beim Start auf Niederländisch).
 - **Liste mit Spieldaten-Ordnern statt Spiel:** die umgewandelten Daten
   liegen nicht in `~/.local/share/GalaxyQuest/game` (dort muss direkt `sys`
   und `files` liegen). *Not converted* heißt: noch mit `cook.py` umwandeln.
-- **Ruckelt:** 120 Hz einstellen (siehe oben).
+- **Ruckelt:** prüfen, ob SteamVR für GalaxyQuest 120 Hz nutzt (siehe
+  oben); im Protokoll zeigen Zeilen mit `missed … refreshes`, wie oft ein
+  Bild zu spät kam.
 - **Bild schliert bei Kopfbewegungen:** in `petari_vr.ini` muss
   `timewarp = 1` gelten (Standard): dann dreht das Spiel jedes der 120
   Bilder pro Sekunde auf die aktuelle Kopfhaltung nach, was SteamVR selbst
