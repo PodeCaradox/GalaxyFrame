@@ -47,6 +47,9 @@ static u16 sMixerLevel = 0x4000;
 extern "C" u32 port_dsp_varam_base(void) { return sVaramBase; }
 
 static void queueMail(u32 a, u32 b) {
+    // Called on the game's audio thread; the queue's nodes come and go with
+    // the mail (libstdc++'s deque frees each emptied one): host heap.
+    PortHostAllocScope scope;
     std::lock_guard<std::mutex> lk(sMailMutex);
     sMailFromDsp.push_back(a);
     sMailFromDsp.push_back(b);
@@ -164,7 +167,10 @@ void DSPSendMailToDSP(u32 mail) {
         sWaitingCount = false;
         return;
     }
-    sPacket.push_back(mail);
+    {
+        PortHostAllocScope scope;  // the packet buffer outlives the game's heaps
+        sPacket.push_back(mail);
+    }
     if (sPacket.size() >= sPacketExpected) {
         sWaitingCount = true;
         executePacket();

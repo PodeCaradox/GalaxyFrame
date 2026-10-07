@@ -47,6 +47,11 @@ void FileLoaderThread::loadToMainRAM(RequestFileInfo* pInfo) {
 void FileLoaderThread::mountArchiveAndStartCreateResource(RequestFileInfo* pInfo) {
     pInfo->_88 = 1;
     void* data = ::loadFileUsingRipper(pInfo);
+#ifdef TARGET_PC
+    if (data == nullptr) {
+        OSReport("FileLoaderThread: archive %s did not load\n", pInfo->mFileName);
+    }
+#endif
     MR::createAndAddArchive(data, pInfo->mFileEntry->mHeap, pInfo->mFileName);
     pInfo->mFileEntry->setContext(data, pInfo->mFileEntry->mHeap);
     pInfo->_88 = 2;

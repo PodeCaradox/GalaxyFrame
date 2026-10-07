@@ -1,4 +1,4 @@
-#include "revolution/OS.h"
+#include "revolution/os.h"
 #include "revolution/wud/WUDInternal.h"
 
 #include <cstddef>

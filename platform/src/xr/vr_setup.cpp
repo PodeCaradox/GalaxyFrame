@@ -12,8 +12,10 @@
 // from main.dol, show as to convert again.
 #include <GLES3/gl32.h>
 #include <dirent.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -112,6 +114,16 @@ bool isDir(const std::string& path) {
     return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+// The shared storage the search covers: the headset's, or the home folder on Linux.
+std::string storageRoot() {
+#ifdef __ANDROID__
+    return "/storage/emulated/0";
+#else
+    const char* home = getenv("HOME");
+    return home ? home : "/";
+#endif
+}
+
 void scanDir(const std::string& dir, int depth, bool skipAndroid, std::vector<Found>& out, int64_t deadline) {
     bool ready = false, outdated = false, unknown = false;
     if (vr::isGameFolder(dir, &ready, &outdated, &unknown)) {
@@ -155,9 +167,26 @@ void search() {
         std::vector<Found> found;
         int64_t deadline = port_host_time_ns() + 4000000000ll;
         scanDir(appDir, 3, false, found, deadline);
+#ifndef __ANDROID__
+        // SD cards and USB sticks: SteamOS mounts them under /run/media.
+        scanDir("/run/media", 4, false, found, deadline);
+#endif
         if (access) {
-            scanDir("/storage/emulated/0", 4, true, found, deadline);
+            scanDir(storageRoot(), 4, true, found, deadline);
         }
+        // A folder reached twice (SteamOS also links /run/media/<label> to
+        // the mount) is listed once.
+        std::vector<Found> unique;
+        std::vector<std::string> seen;
+        for (const Found& f : found) {
+            char real[PATH_MAX];
+            std::string key = realpath(f.path.c_str(), real) ? real : f.path;
+            if (std::find(seen.begin(), seen.end(), key) == seen.end()) {
+                seen.push_back(key);
+                unique.push_back(f);
+            }
+        }
+        found.swap(unique);
         // Ready folders first.
         std::stable_sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.ready > b.ready; });
         port_log("setup: %zu game folders found (all files access %s)", found.size(), access ? "on" : "off");
@@ -181,10 +210,10 @@ void search() {
 // shortened from the left.
 std::string shownPath(const std::string& path) {
     std::string p = path;
-    const char* roots[] = {"/storage/emulated/0/", "/sdcard/"};
-    for (const char* r : roots) {
-        if (p.compare(0, strlen(r), r) == 0) {
-            p = "Headset storage/" + p.substr(strlen(r));
+    const std::string roots[] = {"/storage/emulated/0/", "/sdcard/", storageRoot() + "/"};
+    for (const std::string& r : roots) {
+        if (p.compare(0, r.size(), r) == 0) {
+            p = "Headset storage/" + p.substr(r.size());
             break;
         }
     }

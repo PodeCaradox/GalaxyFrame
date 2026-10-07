@@ -1585,7 +1585,12 @@ namespace MR {
     }
 
     bool isNan(const TVec3f& rVec) {
+#ifdef TARGET_PC
+        // 1 is MSL's FP_NAN; the host C libraries number the classes otherwise.
+        if (__builtin_isnan(rVec.x) || __builtin_isnan(rVec.y) || __builtin_isnan(rVec.z)) {
+#else
         if (__fpclassifyf(rVec.x) == 1 || __fpclassifyf(rVec.y) == 1 || __fpclassifyf(rVec.z) == 1) {
+#endif
             return true;
         }
 

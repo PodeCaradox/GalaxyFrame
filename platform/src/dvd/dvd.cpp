@@ -405,6 +405,10 @@ static void dvdIrq() {
 static void submit(DVDCommandBlock* b, u32 entry) {
     b->state = kStateBusy;
     b->transferredSize = 0;
+    // The queue's nodes come and go with the requests (libstdc++'s deque
+    // frees each one the worker has emptied): from the host heap, never the
+    // game's.
+    PortHostAllocScope scope;
     std::lock_guard<std::mutex> lk(sQueueMutex);
     sPending.push_back({b, entry});
     sQueueCv.notify_one();

@@ -12,6 +12,21 @@
 // Declare the C library's printf family (including bionic's FORTIFY inline
 // wrappers) before the renames below, so the macros only affect game code.
 #include <stdio.h>
+// Likewise its wide-string functions: glibc declares them noexcept, and
+// libstdc++'s <cwchar> names each one.  libc++ also brings <float.h> along.
+#include <float.h>
+#include <wchar.h>
+#ifdef __cplusplus
+#include <cwchar>
+// libstdc++'s <cstdio> #undefs the printf family: included before the
+// renames below, the game's later includes of it leave them in force.
+#include <cstdio>
+#endif
+
+#ifndef __ANDROID__
+// MSL's name for va_list, used by JSystem's headers; glibc does not declare it.
+typedef va_list __va_list;
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,6 +56,21 @@ int port_vswprintf(wchar_t* dst, size_t n, const wchar_t* fmt, va_list args);
 #define wcscat port_wcscat
 #define swprintf port_swprintf
 #define vswprintf port_vswprintf
+#ifdef __cplusplus
+// For std:: spellings after the renames (libstdc++ before GCC 14 takes
+// &std::vswprintf in std::to_wstring).
+namespace std {
+using ::port_swprintf;
+using ::port_vswprintf;
+using ::port_wcscat;
+using ::port_wcschr;
+using ::port_wcscmp;
+using ::port_wcscpy;
+using ::port_wcslen;
+using ::port_wcsncmp;
+using ::port_wcsncpy;
+}  // namespace std
+#endif
 
 // CodeWarrior MSL printf semantics for game code (NULL "%s" prints nothing,
 // "l" is 32-bit, "%ls" is 16-bit); see platform/src/port/msl_printf.cpp.
@@ -53,6 +83,15 @@ int port_sprintf(char* dst, const char* fmt, ...);
 #define snprintf port_snprintf
 #define vsprintf port_vsprintf
 #define sprintf port_sprintf
+#ifdef __cplusplus
+// libstdc++'s <string> takes &std::vsnprintf (std::to_string).
+namespace std {
+using ::port_snprintf;
+using ::port_sprintf;
+using ::port_vsnprintf;
+using ::port_vsprintf;
+}  // namespace std
+#endif
 #endif
 
 // Renderer hooks called from game code (platform/src/gx/gx_recorder.cpp):

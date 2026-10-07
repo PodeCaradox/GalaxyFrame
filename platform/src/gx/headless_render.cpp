@@ -26,7 +26,13 @@ bool initContext() {
     if (sContext != EGL_NO_CONTEXT) {
         return true;
     }
+#ifdef __ANDROID__
     sDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+#else
+    // Off-screen, as the VR app (xr_app.cpp): over SSH the default platform
+    // finds no display.
+    sDisplay = eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
+#endif
     if (!eglInitialize(sDisplay, nullptr, nullptr)) {
         port_log("headless: eglInitialize failed");
         return false;
@@ -58,7 +64,12 @@ bool initContext() {
             }
         },
         nullptr);
-    gpu::setShaderCachePath(getenv("PETARI_SHADER_CACHE") ? getenv("PETARI_SHADER_CACHE") : "/data/local/tmp/petari/shaders.bin");
+#ifdef __ANDROID__
+    const char* cache = "/data/local/tmp/petari/shaders.bin";
+#else
+    const char* cache = "/tmp/galaxyquest-headless-shaders.bin";
+#endif
+    gpu::setShaderCachePath(getenv("PETARI_SHADER_CACHE") ? getenv("PETARI_SHADER_CACHE") : cache);
     return gpu::renderer().init();
 }
 
@@ -384,7 +395,9 @@ extern "C" unsigned long long port_headless_render(const char* path, int scale) 
                     for (int i = 0; i < 4; i++) r.render(tm->t, &ev, nullptr, gpu::HudMode::Skip);
                     glFinish();
                     long clk = 0;
-                    if (FILE* g = fopen("/sys/class/kgsl/kgsl-3d0/gpuclk", "r")) {
+                    FILE* g = fopen("/sys/class/kgsl/kgsl-3d0/gpuclk", "r");
+                    if (!g) g = fopen("/sys/class/devfreq/3d00000.gpu/cur_freq", "r");  // Linux (Steam Frame)
+                    if (g) {
                         if (fscanf(g, "%ld", &clk) != 1) clk = 0;
                         fclose(g);
                     }

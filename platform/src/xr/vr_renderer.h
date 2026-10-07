@@ -16,6 +16,7 @@ struct EyeInfo {
     xm::Mat4 view;       // eye-from-stage
     xm::Vec3 position;   // eye position in stage space (metres)
     xm::Quat orientation;
+    float tanLeft, tanRight, tanUp, tanDown;  // the field of view (tangents of its angles)
     int width, height;   // swapchain image size (swapchainScale())
 };
 
@@ -95,6 +96,10 @@ void init();
 //   sharpening        1 to sharpen (and scale) the diorama with AMD
 //                     FidelityFX CAS as it is composited; 0 (default) off
 //   sharpening_strength  CAS strength, 0 .. 1 (default 0.5)
+//   timewarp          1 (default) to turn the eye images to the head's pose
+//                     of each display refresh in the app where the runtime
+//                     does not (SteamVR at 120 Hz); 0 shows each game frame
+//                     as rendered, two refreshes long
 //   invert_camera     1 (default) swaps the right stick's left and right
 //                     where they turn the camera: pushing it right turns the
 //                     view to the right (the camera goes round Mario to the
@@ -215,6 +220,23 @@ struct Extent {
     int width, height;
 };
 Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int height);
+
+// renderEye in two parts, for the app's own timewarp (SteamVR shows an eye
+// image as it was rendered, where Meta's compositor turns it to the head's
+// newest pose).  The eyes' views of the game frame go into one of two scene
+// sets (setSceneSet, before beginFrame, which sizes them): renderEyeScene
+// renders eye `eye` into the current set.  compositeEye then draws eye `eye`
+// of scene set `set` into `fbo` as renderEye would, for the eye `display`
+// describes: the picture is turned from the pose it was rendered for to that
+// one (rotation only), and the laser and the other overlays are drawn from
+// it.  So one set can be shown, every display refresh at its own pose, while
+// the next game frame is rendered into the other.
+void setSceneSet(int set);
+void renderEyeScene(int eye, const FrameInfo& frame);
+Extent compositeEye(int eye, int set, const FrameInfo& display, GLuint fbo, int width, int height);
+// Whether the app turns the eye images to each refresh's pose itself (the
+// timewarp setting; on by default).
+bool timewarp();
 
 // SpaceWarp (Meta's XR_FB_space_warp).  setMotionSize: the size of the
 // motion vector and depth images, before the first frame with

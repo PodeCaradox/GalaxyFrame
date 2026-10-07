@@ -17,6 +17,7 @@ import collections
 import concurrent.futures
 import multiprocessing
 import os
+import re
 import shutil
 import struct
 import sys
@@ -161,9 +162,38 @@ def cook_rarc(data, stats, replace=None):
     return rarc_swap.swap_rarc(data, cook_file)
 
 
+LANGUAGE_DIR = re.compile(r'^(Eu|Us|Jp|Kr)[A-Z][a-z]+$')
+# EuDutch before EuEnglish: fan translations reuse the English folder.
+STAND_IN_FIRST = ('UsEnglish', 'EuDutch', 'EuEnglish')
+ARCHIVE_MAGICS = (b'RARC', b'U\xaa8-', b'AA_<')
+
+
+def language_stand_ins(src):
+    """The same file in the disc's other language folders.  A fan
+    translation that grew one language's file over its neighbours on the
+    disc leaves those unreadable (RMGR01, Russian in the English folder: the
+    French and German strap screens)."""
+    parts = src.replace('\\', '/').split('/')
+    for i, part in enumerate(parts):
+        if LANGUAGE_DIR.match(part):
+            base = '/'.join(parts[:i])
+            others = sorted(d for d in os.listdir(base) if LANGUAGE_DIR.match(d) and d != part)
+            others.sort(key=lambda d: STAND_IN_FIRST.index(d) if d in STAND_IN_FIRST else len(STAND_IN_FIRST))
+            return ['/'.join([base, d] + parts[i + 1:]) for d in others]
+    return []
+
+
 def cook_archive(src, dst, stats, notes):
     raw = open(src, 'rb').read()
     data = bytearray(yaz0_decompress(raw))
+    if data[:4] not in ARCHIVE_MAGICS:
+        for alt in language_stand_ins(src):
+            if os.path.isfile(alt):
+                alt_data = bytearray(yaz0_decompress(open(alt, 'rb').read()))
+                if alt_data[:4] in ARCHIVE_MAGICS:
+                    notes.append('%s: damaged on this disc, %s used instead' % (src, alt))
+                    data = alt_data
+                    break
     if data[:4] == b'AA_<':
         return cook_blob(src.replace('\\', '/'), data, stats)
     if data[:4] != b'RARC':

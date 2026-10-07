@@ -1,11 +1,18 @@
 // Non-standard helpers and pre-C++17 functional adaptors that the game code
 // expects from Metrowerks' MSL C++ library.  libc++ in C++20 mode no longer
-// declares the adaptors, so defining them here does not collide with it.
+// declares the adaptors, so defining them here does not collide with it;
+// libstdc++ (Linux) still has them, deprecated, and they are taken from it,
+// all but MSL's own: mem_func, and binder2nd, which also takes the bound
+// value's type and is renamed out of libstdc++'s way.
 #pragma once
 
 #include <algorithm>
 #include <functional>
 #include <iterator>
+
+#ifndef _LIBCPP_VERSION
+#define binder2nd msl_binder2nd
+#endif
 
 namespace std {
 
@@ -33,6 +40,7 @@ namespace std {
         return first;
     }
 
+#ifdef _LIBCPP_VERSION
     // ---- C++98 adaptor base classes ---------------------------------------
     template < class Arg, class Result >
     struct unary_function {
@@ -65,6 +73,8 @@ namespace std {
         return binder1st< Func >(f, typename Func::first_argument_type(v));
     }
 
+#endif  // _LIBCPP_VERSION
+
     template < class Func, class Type = typename Func::second_argument_type >
     class binder2nd : public unary_function< typename Func::first_argument_type, typename Func::result_type > {
     public:
@@ -77,6 +87,7 @@ namespace std {
         Type value;
     };
 
+#ifdef _LIBCPP_VERSION
     template < class Func, class Type >
     inline binder2nd< Func, typename Func::second_argument_type > bind2nd(const Func& f, const Type& v) {
         return binder2nd< Func, typename Func::second_argument_type >(f, typename Func::second_argument_type(v));
@@ -157,6 +168,8 @@ namespace std {
     template < class Result, class Type, class Arg >
     inline mem_fun1_ref_t< Result, Type, Arg > mem_fun_ref(Result (Type::*p)(Arg)) { return mem_fun1_ref_t< Result, Type, Arg >(p); }
 
+#endif  // _LIBCPP_VERSION
+
     // MSL spelling of mem_fun.
     template < class Result, class Type >
     inline mem_fun_t< Result, Type > mem_func(Result (Type::*p)()) { return mem_fun_t< Result, Type >(p); }
@@ -167,6 +180,7 @@ namespace std {
     template < class Result, class Type, class Arg >
     inline const_mem_fun1_t< Result, Type, Arg > mem_func(Result (Type::*p)(Arg) const) { return const_mem_fun1_t< Result, Type, Arg >(p); }
 
+#ifdef _LIBCPP_VERSION
     // ---- negators / function pointers ------------------------------------------
     template < class Predicate >
     class unary_negate : public unary_function< typename Predicate::argument_type, bool > {
@@ -212,5 +226,7 @@ namespace std {
     inline pointer_to_binary_function< Arg1, Arg2, Result > ptr_fun(Result (*p)(Arg1, Arg2)) {
         return pointer_to_binary_function< Arg1, Arg2, Result >(p);
     }
+
+#endif  // _LIBCPP_VERSION
 
 }  // namespace std

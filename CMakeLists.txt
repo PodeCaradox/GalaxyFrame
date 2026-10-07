@@ -11,7 +11,10 @@ set(DECOMP ${CMAKE_SOURCE_DIR}/decomp)
 if(ANDROID)
   set(PORT_PLATFORM android)
 else()
-  set(PORT_PLATFORM desktop)
+  set(PORT_PLATFORM linux)
+  # Position-independent code: the executable sits at 0x98000000, beyond the
+  # reach of x86-64's absolute 32-bit addressing.
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -94,8 +97,17 @@ set(PORT_COMMON_FLAGS
   -Wno-microsoft-include
   -Wno-language-extension-token
   -ferror-limit=0
+  # With -fshort-wchar, newer clang turns port_wcslen's 16-bit loop into a
+  # call to the C library's 32-bit wcslen.
+  -fno-builtin-wcslen
   -include ${CMAKE_SOURCE_DIR}/platform/include/port/compat.h
 )
+if(NOT ANDROID AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+  # JKRHeap's operator new aligns to 4 bytes; clang's SSE stores to memory it
+  # takes for 16-byte aligned fault on x86-64 (ARM allows them).  Not 4: types
+  # holding a double would go to the aligned operator new, off the game heap.
+  list(APPEND PORT_COMMON_FLAGS -fnew-alignment=8)
+endif()
 set(PORT_CXX_FLAGS -fno-exceptions -fno-rtti)
 set(PORT_C_FLAGS)
 
@@ -111,7 +123,16 @@ file(GLOB_RECURSE PLATFORM_SRCS CONFIGURE_DEPENDS
   ${CMAKE_SOURCE_DIR}/platform/src/*.c
   ${CMAKE_SOURCE_DIR}/platform/src/*.cpp)
 
-add_library(game SHARED $<TARGET_OBJECTS:decomp> ${PLATFORM_SRCS})
+if(ANDROID)
+  add_library(game SHARED $<TARGET_OBJECTS:decomp> ${PLATFORM_SRCS})
+else()
+  # Linux (Steam Frame): one executable, linked where libgame.so loads on
+  # Android; platform/linux/main.c reserves the game's window around it.
+  add_library(launcher OBJECT platform/linux/main.c platform/android/headless.c)
+  target_include_directories(launcher PRIVATE platform/include)
+  add_executable(game $<TARGET_OBJECTS:decomp> $<TARGET_OBJECTS:launcher> ${PLATFORM_SRCS})
+  set_target_properties(game PROPERTIES OUTPUT_NAME galaxyquest)
+endif()
 target_include_directories(game PRIVATE ${DECOMP_INCLUDES})
 target_compile_definitions(game PRIVATE ${PORT_DEFS} PORT_PLATFORM_CODE=1)
 target_compile_options(game PRIVATE ${PORT_COMMON_FLAGS} $<$<COMPILE_LANGUAGE:CXX>:${PORT_CXX_FLAGS}> $<$<COMPILE_LANGUAGE:C>:${PORT_C_FLAGS}>)
@@ -121,6 +142,29 @@ if(ANDROID)
   # system C++ runtime's.
   target_link_options(game PRIVATE -Wl,-Bsymbolic -Wl,--gc-sections)
   target_link_libraries(game PRIVATE log android)
+endif()
+
+if(NOT ANDROID)
+  # The OpenXR loader is shipped next to the executable ($ORIGIN), with the
+  # libjsoncpp.so.26 it needs (SteamOS has .25).  An RPATH, unlike a RUNPATH,
+  # also covers the loader's own dependencies.
+  find_library(OPENXR_LOADER NAMES openxr_loader REQUIRED)
+  target_link_options(game PRIVATE -fuse-ld=lld -no-pie -Wl,--image-base=0x98000000 -Wl,--disable-new-dtags -Wl,-rpath,$ORIGIN)
+  target_link_libraries(game PRIVATE ${OPENXR_LOADER} EGL GLESv2 asound pthread dl m)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+    # x86-64's non-PIE start files address absolutely below 2 GB; -B swaps in
+    # the PIE ones, which work at 0x98000000 (a PC build, for testing).
+    set(PIE_CRT ${CMAKE_BINARY_DIR}/pie-crt)
+    file(MAKE_DIRECTORY ${PIE_CRT})
+    foreach(pair crt1.o:Scrt1.o crtbegin.o:crtbeginS.o crtend.o:crtendS.o)
+      string(REPLACE ":" ";" pair ${pair})
+      list(GET pair 0 name)
+      list(GET pair 1 pie)
+      execute_process(COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=${pie} OUTPUT_VARIABLE path OUTPUT_STRIP_TRAILING_WHITESPACE)
+      file(CREATE_LINK ${path} ${PIE_CRT}/${name} SYMBOLIC)
+    endforeach()
+    target_link_options(game PRIVATE -B${PIE_CRT})
+  endif()
 endif()
 
 if(ANDROID)
