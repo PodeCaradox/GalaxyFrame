@@ -19,9 +19,9 @@ Installation, controls and troubleshooting: [STEAM-FRAME.md](STEAM-FRAME.md)
 
 > **Notice.** This is an unofficial, non-commercial fan project. It is not
 > affiliated with, endorsed by or sponsored by Nintendo. Super Mario Galaxy
-> and all related names are trademarks of Nintendo. This repository and its
-> releases contain **no game data**: no disc image, no textures, models,
-> sounds, music or movies. To play you need your own, legally obtained
+> and all related names are trademarks of Nintendo. This repository contains
+> **no game data** (no disc image, no textures, models, sounds, music or
+> movies) and no ready-made builds. To play you need your own, legally obtained
 > Super Mario Galaxy disc, which you convert yourself. Do not share
 > converted game files, and do not ask for them here.
 >
@@ -30,9 +30,9 @@ Installation, controls and troubleshooting: [STEAM-FRAME.md](STEAM-FRAME.md)
 
 ### Install
 
-Download `GalaxyQuest-SteamFrame-arm64.tar.gz` from the
-[Releases](../../releases), extract it into your home folder on the Frame
-(desktop mode) and run, with the path to your own disc image:
+Build `GalaxyQuest-SteamFrame-arm64.tar.gz` yourself as described below
+(there is no ready-made download), extract it into your home folder on the
+Frame (desktop mode) and run, with the path to your own disc image:
 
 ```
 ~/GalaxyQuest/install.sh ~/Downloads/SuperMarioGalaxy.iso
@@ -44,8 +44,7 @@ describe installing from a PC over SSH.
 
 ### Building it yourself
 
-You can build the Frame version from this repository instead of using the
-release. It is cross-compiled on a PC running Linux, or Windows with WSL2,
+The Frame version is cross-compiled on a PC running Linux, or Windows with WSL2,
 against Valve's Steam Runtime 4 SDK for arm64.
 
 1. **Windows only:** open PowerShell and install Ubuntu in WSL2, then open
@@ -81,7 +80,7 @@ against Valve's Steam Runtime 4 SDK for arm64.
 
    The first build takes a while; later ones only rebuild what changed. The
    result is `build-linux-arm64/GalaxyQuest-SteamFrame-arm64.tar.gz`, the
-   same kind of archive as the release (program, the OpenXR loader and
+   archive to install (program, the OpenXR loader and
    jsoncpp next to it, `install.sh`, the converter and the guides).
 
 5. Install it on the Frame as above. From the PC over SSH (developer mode

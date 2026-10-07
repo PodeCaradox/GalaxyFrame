@@ -23,7 +23,8 @@ in der [README](README.md).
   europäischen Disc (RMGR01; das Spiel meldet sie als RMGP01). Die
   europäische (RMGP01) und die amerikanische (RMGE01) laufen in der
   Quest-Fassung.
-- Aus den **Releases** dieses Repositorys `GalaxyQuest-SteamFrame-arm64.tar.gz`.
+- Das Archiv `GalaxyQuest-SteamFrame-arm64.tar.gz`, selbst gebaut (siehe
+  *Selbst bauen* unten; einen fertigen Download gibt es nicht).
 
 Einen PC brauchst du nicht: `install.sh` aus dem Archiv entpackt die Disc auf
 der Frame (mit Dolphins `dolphin-tool`; fehlt Dolphin, installiert das Skript
@@ -182,7 +183,7 @@ ARCH=arm64 STEAMRT4_ARM64_SYSROOT=~/steamrt4-arm64-sdk/sysroot ./build_linux.sh
 
 Ergebnis in `build-linux-arm64/`: `galaxyquest`, `libopenxr_loader.so.1`,
 `libjsoncpp.so.26` und daraus gepackt `GalaxyQuest-SteamFrame-arm64.tar.gz`
-(das Release-Archiv, mit `install.sh` aus `platform/linux/` und dem
+(das Archiv zum Installieren, mit `install.sh` aus `platform/linux/` und dem
 Konverter). Ein Entwicklungsstand auf die Frame:
 `tools/push_frame.sh steamos@frame.local [cooked-Ordner]`.
 

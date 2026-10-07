@@ -23,7 +23,8 @@ VR settings) is in the [README](README.md).
   Russian fan translation of the European disc (RMGR01; the game reports it
   as RMGP01). The European (RMGP01) and American (RMGE01) discs run in the
   Quest version.
-- `GalaxyQuest-SteamFrame-arm64.tar.gz` from this repository's **Releases**.
+- The archive `GalaxyQuest-SteamFrame-arm64.tar.gz`, built yourself (see
+  *Building it yourself* below; there is no ready-made download).
 
 You do not need a PC: `install.sh` from the archive extracts the disc on the
 Frame (with Dolphin's `dolphin-tool`; if Dolphin is missing, the script
@@ -180,7 +181,7 @@ ARCH=arm64 STEAMRT4_ARM64_SYSROOT=~/steamrt4-arm64-sdk/sysroot ./build_linux.sh
 
 The result in `build-linux-arm64/`: `galaxyquest`, `libopenxr_loader.so.1`,
 `libjsoncpp.so.26`, and packed from them
-`GalaxyQuest-SteamFrame-arm64.tar.gz` (the release archive, with
+`GalaxyQuest-SteamFrame-arm64.tar.gz` (the archive to install, with
 `install.sh` from `platform/linux/` and the converter). A development build
 to the Frame: `tools/push_frame.sh steamos@frame.local [cooked folder]`.
 
