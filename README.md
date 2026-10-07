@@ -14,8 +14,9 @@
 
 This is a fork of [bigmak94/GalaxyQuest](https://github.com/bigmak94/GalaxyQuest)
 that also runs natively on Valve's **Steam Frame** (SteamOS, arm64).
-Installation, controls and troubleshooting: [STEAM-FRAME.md](STEAM-FRAME.md)
-(English), [ANLEITUNG-STEAM-FRAME.md](ANLEITUNG-STEAM-FRAME.md) (Deutsch).
+How to build and install it is below; controls, settings and
+troubleshooting are in [STEAM-FRAME.md](STEAM-FRAME.md) (English) and
+[ANLEITUNG-STEAM-FRAME.md](ANLEITUNG-STEAM-FRAME.md) (Deutsch).
 
 > **Notice.** This is an unofficial, non-commercial fan project. It is not
 > affiliated with, endorsed by or sponsored by Nintendo. Super Mario Galaxy
@@ -28,24 +29,16 @@ Installation, controls and troubleshooting: [STEAM-FRAME.md](STEAM-FRAME.md)
 > Rights holders who want something removed: please open an issue on this
 > repository, and it will be taken down promptly.
 
-### Install
+There are no ready-made builds: you build the Frame version yourself on a
+PC (about 10 minutes the first time), copy it to the Frame together with
+your disc image, and run `install.sh` there. `install.sh` extracts the disc
+with Dolphin (installed from Flathub if missing), converts the game files
+and adds the game to Steam.
 
-Build `GalaxyQuest-SteamFrame-arm64.tar.gz` yourself as described below
-(there is no ready-made download), extract it into your home folder on the
-Frame (desktop mode) and run, with the path to your own disc image:
+### 1. Build it (PC)
 
-```
-~/GalaxyQuest/install.sh ~/Downloads/SuperMarioGalaxy.iso
-```
-
-It extracts the disc with Dolphin (installed from Flathub if missing),
-converts the game files and adds the game to Steam. The guides above also
-describe installing from a PC over SSH.
-
-### Building it yourself
-
-The Frame version is cross-compiled on a PC running Linux, or Windows with WSL2,
-against Valve's Steam Runtime 4 SDK for arm64.
+The Frame version is cross-compiled on a PC running Linux, or Windows with
+WSL2, against Valve's Steam Runtime 4 SDK for arm64.
 
 1. **Windows only:** open PowerShell and install Ubuntu in WSL2, then open
    *Ubuntu 24.04* from the Start menu and do the rest there:
@@ -54,7 +47,8 @@ against Valve's Steam Runtime 4 SDK for arm64.
    wsl --install -d Ubuntu-24.04
    ```
 
-2. Install the tools (CMake 3.24+, clang 16+, lld, Ninja):
+2. Install the tools (CMake 3.24+, clang 16+, lld, Ninja; tested with
+   clang 20, `sudo apt install clang-20` if the default one fails):
 
    ```
    sudo apt update
@@ -78,19 +72,63 @@ against Valve's Steam Runtime 4 SDK for arm64.
    ARCH=arm64 STEAMRT4_ARM64_SYSROOT=~/steamrt4-arm64-sdk/sysroot ./build_linux.sh
    ```
 
-   The first build takes a while; later ones only rebuild what changed. The
-   result is `build-linux-arm64/GalaxyQuest-SteamFrame-arm64.tar.gz`, the
-   archive to install (program, the OpenXR loader and
-   jsoncpp next to it, `install.sh`, the converter and the guides).
+   The result is `~/GalaxyQuest/build-linux-arm64/GalaxyQuest-SteamFrame-arm64.tar.gz`:
+   the program with the OpenXR loader and jsoncpp next to it, `install.sh`,
+   the disc converter and the guides. Later builds (after `git pull`) only
+   rebuild what changed.
 
-5. Install it on the Frame as above. From the PC over SSH (developer mode
-   on, with a password for the user `steamos` set in the developer
-   settings):
+   On Windows, `explorer.exe build-linux-arm64` in the Ubuntu window opens
+   that folder in Explorer, to copy the file out.
+
+### 2. Bring it to the Frame and install
+
+**Option A – USB stick, no network setup:**
+
+1. Copy `GalaxyQuest-SteamFrame-arm64.tar.gz` and your disc image (here
+   `smg.iso`) to a USB stick.
+2. On the Frame, switch to desktop mode and plug in the stick.
+3. In the file manager (Dolphin), copy both files from the stick into your
+   home folder, then right-click the archive → *Extract → Extract archive
+   here*. (Not on the stick itself: the program would not be allowed to run
+   from there.)
+4. Open Konsole and run:
 
    ```
-   scp build-linux-arm64/GalaxyQuest-SteamFrame-arm64.tar.gz smg.iso steamos@frame.local:
+   ~/GalaxyQuest/install.sh ~/smg.iso
+   ```
+
+**Option B – over the network (SSH):**
+
+1. Once, on the Frame: turn on *Settings → System → Developer Mode* and set
+   a password for the user `steamos` in the developer settings. That turns
+   SSH on.
+2. On the PC, in the folder with the archive and the disc image:
+
+   ```
+   scp GalaxyQuest-SteamFrame-arm64.tar.gz smg.iso steamos@frame.local:
    ssh steamos@frame.local "tar -xzf GalaxyQuest-SteamFrame-arm64.tar.gz && ~/GalaxyQuest/install.sh ~/smg.iso && rm ~/smg.iso"
    ```
+
+   Both ask for the password from step 1. If `frame.local` is not found
+   (often the case inside WSL), use the Frame's IP address instead
+   (`ip a` in Konsole on the Frame shows it). From the Ubuntu window the
+   build is at `build-linux-arm64/GalaxyQuest-SteamFrame-arm64.tar.gz` and
+   a disc image in the Windows downloads at
+   `/mnt/c/Users/<you>/Downloads/smg.iso`.
+
+Add `--no-movies` after the disc image to leave out the prologue and ending
+movies (2.3 GB less).
+
+### 3. Start it
+
+`install.sh` adds the game to Steam when Steam is running (otherwise:
+Steam → *Games* → *Add a Non-Steam Game to My Library…* → *Browse* →
+`/home/steamos/GalaxyQuest/galaxyquest`). In the entry's *Properties*,
+rename it to `GalaxyQuest` and **tick "Include in VR Library"**, then start
+it from the library in VR mode.
+
+Controls, settings and troubleshooting: [STEAM-FRAME.md](STEAM-FRAME.md)
+(English), [ANLEITUNG-STEAM-FRAME.md](ANLEITUNG-STEAM-FRAME.md) (Deutsch).
 
 What the port changes compared with the Quest version is described in
 [docs/TECHNICAL.md](docs/TECHNICAL.md) under "Steam Frame (Linux)".
@@ -111,8 +149,6 @@ in C++ by the [Petari decompilation project](https://github.com/SMGCommunity/Pet
 is compiled for the headset's processor. A new platform layer stands in for
 the Wii's hardware (graphics, sound, controllers, saves) and presents the
 game in VR through OpenXR.
-
-![Mario on a pirate ship in the diorama view](docs/images/diorama.jpg)
 
 > **You need your own copy of Super Mario Galaxy.** Neither this repository
 > nor the app contains any game data. You convert your own disc once (its
@@ -170,8 +206,6 @@ resolution.
 
 **Everything else is the original game.** Levels, physics, enemies, music,
 story and saves all come from the game's own code and your own game files.
-
-![The pause menu with the VR settings panel](docs/images/pause_settings.jpg)
 
 ## What you need
 

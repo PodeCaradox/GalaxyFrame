@@ -23,51 +23,94 @@ VR settings) is in the [README](README.md).
   Russian fan translation of the European disc (RMGR01; the game reports it
   as RMGP01). The European (RMGP01) and American (RMGE01) discs run in the
   Quest version.
-- The archive `GalaxyQuest-SteamFrame-arm64.tar.gz`, built yourself (see
-  *Building it yourself* below; there is no ready-made download).
+- A **PC** with Linux, or Windows with WSL2, to build the program once.
+  There are no ready-made builds.
 
-You do not need a PC: `install.sh` from the archive extracts the disc on the
-Frame (with Dolphin's `dolphin-tool`; if Dolphin is missing, the script
-installs it from Flathub), converts the game files (a few minutes, 3.3 GB)
-and adds the game to Steam.
+`install.sh` from the built archive then does the rest on the Frame: it
+extracts the disc (with Dolphin's `dolphin-tool`; if Dolphin is missing, the
+script installs it from Flathub), converts the game files (a few minutes,
+3.3 GB) and adds the game to Steam.
 
-## 1. Install
+## 1. Build it (PC)
 
-**Option A – on the Frame itself:**
+1. **Windows only:** open PowerShell and install Ubuntu in WSL2, then open
+   *Ubuntu 24.04* from the Start menu and do the rest there:
 
-1. Switch the Frame to desktop mode.
-2. Put the archive and your disc image into your home folder (download them
-   in the browser or copy them from a USB stick).
-3. Extract the archive there (right-click → *Extract → Extract archive
-   here*): this makes the folder `GalaxyQuest`. Do not extract it on the USB
-   stick: the program would not be allowed to run from there.
+   ```
+   wsl --install -d Ubuntu-24.04
+   ```
+
+2. Install the tools (CMake 3.24+, clang 16+, lld, Ninja; tested with
+   clang 20, `sudo apt install clang-20` if the default one fails):
+
+   ```
+   sudo apt update
+   sudo apt install git clang lld cmake ninja-build python3 curl
+   ```
+
+3. Download Valve's Steam Runtime 4 SDK sysroot for arm64 (about 1 GB):
+
+   ```
+   mkdir -p ~/steamrt4-arm64-sdk/sysroot && cd ~/steamrt4-arm64-sdk
+   curl -O https://repo.steampowered.com/steamrt4/images/latest-public-beta/com.valvesoftware.SteamRuntime.Sdk-arm64-steamrt4-sysroot.tar.gz
+   tar -xzf com.valvesoftware.SteamRuntime.Sdk-arm64-steamrt4-sysroot.tar.gz -C sysroot --exclude='./dev/*'
+   ```
+
+4. Get the source and build it. Keep it in the Linux home folder, not on a
+   Windows drive or a USB stick (they lose the executable bit):
+
+   ```
+   git clone https://github.com/PodeCaradox/GalaxyQuest-SteamFrame.git ~/GalaxyQuest
+   cd ~/GalaxyQuest
+   ARCH=arm64 STEAMRT4_ARM64_SYSROOT=~/steamrt4-arm64-sdk/sysroot ./build_linux.sh
+   ```
+
+   The result is `~/GalaxyQuest/build-linux-arm64/GalaxyQuest-SteamFrame-arm64.tar.gz`
+   (about 10 minutes the first time; after `git pull` only what changed is
+   rebuilt). On Windows, `explorer.exe build-linux-arm64` in the Ubuntu
+   window opens that folder in Explorer.
+
+## 2. Bring it to the Frame and install
+
+**Option A – USB stick, no network setup:**
+
+1. Copy `GalaxyQuest-SteamFrame-arm64.tar.gz` and your disc image (here
+   `smg.iso`) to a USB stick.
+2. On the Frame, switch to desktop mode and plug in the stick.
+3. In the file manager (Dolphin), copy both files from the stick into your
+   home folder, then right-click the archive → *Extract → Extract archive
+   here*. This makes the folder `GalaxyQuest`. (Not on the stick itself:
+   the program would not be allowed to run from there.)
 4. Open Konsole and run, with the path to your disc image:
 
    ```
-   ~/GalaxyQuest/install.sh ~/Downloads/SuperMarioGalaxy.iso
+   ~/GalaxyQuest/install.sh ~/smg.iso
    ```
 
-**Option B – from a PC over the network (SSH):**
+**Option B – over the network (SSH):**
 
-Once, on the Frame: turn on *Settings → System → Developer Mode* and set a
-password for the user `steamos` in the developer settings. That turns SSH on
-(`ssh` asks for this password). Without developer mode, Konsole in desktop
-mode does it too: `passwd`, then `sudo systemctl enable --now sshd`.
+1. Once, on the Frame: turn on *Settings → System → Developer Mode* and set
+   a password for the user `steamos` in the developer settings. That turns
+   SSH on. (Without developer mode, Konsole in desktop mode does it too:
+   `passwd`, then `sudo systemctl enable --now sshd`.)
+2. On the PC (Windows PowerShell, a Linux terminal or the Ubuntu window),
+   in the folder with the archive and the disc image:
 
-Then on the PC (Windows PowerShell or a Linux terminal), in the folder with
-the archive and the disc image (here `smg.iso`; `frame.local` usually works,
-otherwise use the IP address `ip a` shows on the Frame):
+   ```
+   scp GalaxyQuest-SteamFrame-arm64.tar.gz smg.iso steamos@frame.local:
+   ssh steamos@frame.local "tar -xzf GalaxyQuest-SteamFrame-arm64.tar.gz && ~/GalaxyQuest/install.sh ~/smg.iso && rm ~/smg.iso"
+   ```
 
-```
-scp GalaxyQuest-SteamFrame-arm64.tar.gz smg.iso steamos@frame.local:
-ssh steamos@frame.local "tar -xzf GalaxyQuest-SteamFrame-arm64.tar.gz && ~/GalaxyQuest/install.sh ~/smg.iso && rm ~/smg.iso"
-```
+   Both ask for the password from step 1. If `frame.local` is not found
+   (often the case inside WSL), use the Frame's IP address (`ip a` in
+   Konsole on the Frame). From the Ubuntu window a disc image in the
+   Windows downloads is at `/mnt/c/Users/<you>/Downloads/smg.iso`.
 
-Add `--no-movies` at the end to leave out the prologue and ending movies
-(2.3 GB less). If you already extracted the disc (a folder with `sys` and
-`files`), you can give that folder instead of the image.
+Add `--no-movies` after the disc image to leave out the prologue and ending
+movies (2.3 GB less). If you already extracted the disc (a folder with
+`sys` and `files`), you can give that folder instead of the image.
 
-## 2. Set it up in Steam
+## 3. Set it up in Steam
 
 The script adds the game to Steam if Steam is running (otherwise: Steam →
 *Games* → *Add a Non-Steam Game to My Library…* → *Browse* →
@@ -79,7 +122,7 @@ The script adds the game to Steam if Steam is running (otherwise: Steam →
 
 Switch back to VR mode and start GalaxyQuest from the library.
 
-## 3. Without install.sh (by hand)
+## 4. Without install.sh (by hand)
 
 On the Frame the program goes to `~/GalaxyQuest/`, the *contents* of the
 converted folder to `~/.local/share/GalaxyQuest/game/` (with `sys` and
@@ -96,7 +139,7 @@ If the game finds no data in the home folder, it shows a list of folders
 with game data on start (also on SD cards and USB sticks); pick one there
 and the game remembers it.
 
-## 4. Refresh rate
+## 5. Refresh rate
 
 The game runs at 60 frames a second and shows each one for exactly two
 refreshes when the headset runs at **120 Hz**; on the second it turns the
@@ -165,25 +208,9 @@ notice at start is in Dutch on RMGR01).
   120 pictures a second to your current head pose, which SteamVR itself does
   not do.
 
-## Building it yourself
+## Development
 
-Build on Linux or WSL2 with **Ubuntu 24.04** (CMake 3.24+, clang 16+),
-against Valve's Steam Runtime 4 SDK for arm64:
-
-```
-sudo apt install clang lld cmake ninja-build python3 curl
-mkdir -p ~/steamrt4-arm64-sdk/sysroot && cd ~/steamrt4-arm64-sdk
-curl -O https://repo.steampowered.com/steamrt4/images/latest-public-beta/com.valvesoftware.SteamRuntime.Sdk-arm64-steamrt4-sysroot.tar.gz
-tar -xzf com.valvesoftware.SteamRuntime.Sdk-arm64-steamrt4-sysroot.tar.gz -C sysroot --exclude='./dev/*'
-cd ~/GalaxyQuest        # this repository, not on an exFAT stick
-ARCH=arm64 STEAMRT4_ARM64_SYSROOT=~/steamrt4-arm64-sdk/sysroot ./build_linux.sh
-```
-
-The result in `build-linux-arm64/`: `galaxyquest`, `libopenxr_loader.so.1`,
-`libjsoncpp.so.26`, and packed from them
-`GalaxyQuest-SteamFrame-arm64.tar.gz` (the archive to install, with
-`install.sh` from `platform/linux/` and the converter). A development build
-to the Frame: `tools/push_frame.sh steamos@frame.local [cooked folder]`.
+A development build straight to the Frame: `tools/push_frame.sh steamos@frame.local [cooked folder]`.
 
 What differs from the Quest version is in
 [docs/TECHNICAL.md](docs/TECHNICAL.md) under "Steam Frame (Linux)".
