@@ -10,9 +10,11 @@
 
 # GalaxyQuest
 
-> **Steam Frame:** this fork also runs natively on Valve's Steam Frame
-> (SteamOS, arm64). Installation and controls there:
-> [ANLEITUNG-STEAM-FRAME.md](ANLEITUNG-STEAM-FRAME.md) (Deutsch).
+> **Steam Frame:** this is a fork of
+> [bigmak94/GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) that also
+> runs natively on Valve's Steam Frame (SteamOS, arm64). Installation and
+> controls there: [ANLEITUNG-STEAM-FRAME.md](ANLEITUNG-STEAM-FRAME.md)
+> (Deutsch). Everything below is the original project's README.
 
 **Play Super Mario Galaxy in virtual reality, natively on Meta Quest 2 and 3.**
 
