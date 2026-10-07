@@ -48,12 +48,10 @@ and adds the game to Steam.
 
 **Option B – from a PC over the network (SSH):**
 
-Once, on the Frame in desktop mode, open Konsole:
-
-```
-passwd                              # set a password if there is none yet
-sudo systemctl enable --now sshd
-```
+Once, on the Frame: turn on *Settings → System → Developer Mode* and set a
+password for the user `steamos` in the developer settings. That turns SSH on
+(`ssh` asks for this password). Without developer mode, Konsole in desktop
+mode does it too: `passwd`, then `sudo systemctl enable --now sshd`.
 
 Then on the PC (Windows PowerShell or a Linux terminal), in the folder with
 the archive and the disc image (here `smg.iso`; `frame.local` usually works,

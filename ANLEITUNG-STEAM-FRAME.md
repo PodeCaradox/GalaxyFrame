@@ -48,12 +48,11 @@ trägt das Spiel in Steam ein.
 
 **Variante B – vom PC über das Netzwerk (SSH):**
 
-Einmalig auf der Frame im Desktop-Modus eine Konsole öffnen:
-
-```
-passwd                              # Passwort setzen, falls noch keins
-sudo systemctl enable --now sshd
-```
+Einmalig auf der Frame: *Einstellungen → System → Entwicklermodus*
+einschalten und in den Entwickler-Einstellungen ein Passwort für den
+Benutzer `steamos` setzen. Damit ist SSH an (`ssh` fragt nach diesem
+Passwort). Ohne Entwicklermodus geht es auch in der Konsole des
+Desktop-Modus: `passwd`, dann `sudo systemctl enable --now sshd`.
 
 Dann auf dem PC (Windows-PowerShell oder Linux-Terminal), im Ordner mit dem
 Archiv und dem Disc-Abbild (hier `smg.iso`; `frame.local` geht meistens, sonst
