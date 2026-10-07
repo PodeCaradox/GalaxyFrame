@@ -505,7 +505,10 @@ steps (in German).
   (`/interaction_profiles/valve/frame_controller_valve`, and its older name
   `.../frame_controller`; the runtime accepts their paths only with the
   extension enabled): A, B, X, Y and Menu on the right, a D-pad and View on
-  the left. The D-pad works as the right stick does. A flick of either
+  the left. B and Y spin; X holds Z and adds A a game frame later, the long
+  jump while running (the backflip standing); View alone opens the pause
+  menu (+), the right Menu is left free. The D-pad works as the right stick
+  does. A flick of either
   controller shakes the Wii Remote or the Nunchuk: its speed (from the
   runtime's velocities, else from the last pose) or a quick turn of the
   wrist.
