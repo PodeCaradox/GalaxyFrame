@@ -34,8 +34,14 @@ if [ "$ARCH" = arm64 ]; then
   # executable bit kept (ANLEITUNG-STEAM-FRAME.md).
   rm -rf $BUILD/package
   mkdir -p $BUILD/package/GalaxyQuest
-  cp $BUILD/galaxyquest $BUILD/libopenxr_loader.so.1 $BUILD/libjsoncpp.so.26 LICENSE THIRD_PARTY_NOTICES.md ANLEITUNG-STEAM-FRAME.md $BUILD/package/GalaxyQuest/
-  chmod 644 $BUILD/package/GalaxyQuest/*  # copies from a Windows drive come executable
-  chmod 755 $BUILD/package/GalaxyQuest/galaxyquest
+  cp $BUILD/galaxyquest $BUILD/libopenxr_loader.so.1 $BUILD/libjsoncpp.so.26 LICENSE THIRD_PARTY_NOTICES.md ANLEITUNG-STEAM-FRAME.md \
+    platform/linux/install.sh $BUILD/package/GalaxyQuest/
+  # The disc converter for install.sh, as the converter zip holds it.
+  python3 tools/package_converter.py $BUILD/converter.zip > /dev/null
+  python3 -m zipfile -e $BUILD/converter.zip $BUILD/package/GalaxyQuest/
+  mv $BUILD/package/GalaxyQuest/GalaxyQuest-converter $BUILD/package/GalaxyQuest/converter
+  rm $BUILD/package/GalaxyQuest/converter/README.txt  # the Quest's steps; install.sh does them here
+  find $BUILD/package -type f -exec chmod 644 {} +  # copies from a Windows drive come executable
+  chmod 755 $BUILD/package/GalaxyQuest/galaxyquest $BUILD/package/GalaxyQuest/install.sh
   tar -C $BUILD/package --owner=0 --group=0 -czf $BUILD/GalaxyQuest-SteamFrame-arm64.tar.gz GalaxyQuest
 fi

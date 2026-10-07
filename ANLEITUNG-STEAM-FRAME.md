@@ -14,70 +14,37 @@ in der [README](README.md).
 
 ## Was du brauchst
 
-- Eine **Steam Frame** mit eingerichtetem SteamVR.
-- Dein **Super Mario Galaxy** als Disc-Abbild (ISO, RVZ, WBFS), z. B. mit
-  [CleanRip](https://wiibrew.org/wiki/CleanRip) von deiner Disc gezogen.
-  Auf der Frame getestet: eine russische Fan-Übersetzung der europäischen
-  Disc (RMGR01; das Spiel meldet sie als RMGP01). Die europäische (RMGP01)
-  und die amerikanische (RMGE01) laufen in der Quest-Fassung.
-- Einen **PC** mit
-  - [Python 3.8 oder neuer](https://www.python.org/downloads/) (Windows: beim
-    Installieren „Add python.exe to PATH“ anhaken),
-  - [Dolphin](https://dolphin-emu.org/) zum Entpacken der Disc,
-  - etwa 10 GB freiem Platz.
-- Aus den **Releases** dieses Repositorys:
-  - `GalaxyQuest-SteamFrame-arm64.tar.gz` (das Programm für die Frame),
-  - `GalaxyQuest-converter.zip` (der Konverter für deine Disc).
+- Eine **Steam Frame** mit eingerichtetem SteamVR, etwa 9 GB frei.
+- Dein **Super Mario Galaxy** als Disc-Abbild (ISO, RVZ, WBFS, GCZ, WIA),
+  z. B. mit [CleanRip](https://wiibrew.org/wiki/CleanRip) von deiner Disc
+  gezogen. Auf der Frame getestet: eine russische Fan-Übersetzung der
+  europäischen Disc (RMGR01; das Spiel meldet sie als RMGP01). Die
+  europäische (RMGP01) und die amerikanische (RMGE01) laufen in der
+  Quest-Fassung.
+- Aus den **Releases** dieses Repositorys `GalaxyQuest-SteamFrame-arm64.tar.gz`.
 
-## 1. Disc entpacken (PC)
+Einen PC brauchst du nicht: `install.sh` aus dem Archiv entpackt die Disc auf
+der Frame (mit Dolphins `dolphin-tool`; fehlt Dolphin, installiert das Skript
+es aus Flathub), wandelt die Spieldateien um (einige Minuten, 3,3 GB) und
+trägt das Spiel in Steam ein.
 
-In Dolphin: Rechtsklick auf das Spiel → *Eigenschaften* → Reiter *Dateisystem*
-→ Rechtsklick auf die Disc ganz oben → *Gesamte Disc extrahieren…* → einen
-neuen, leeren Ordner `extracted` wählen. Danach liegt darin `DATA` mit `sys`
-und `files`.
+## 1. Installieren
 
-(Alternativ auf der Kommandozeile: `DolphinTool extract -i "Super Mario Galaxy.iso" -o extracted`.)
+**Variante A – direkt auf der Frame:**
 
-## 2. Spieldaten umwandeln (PC)
+1. Frame in den Desktop-Modus schalten.
+2. Archiv und Disc-Abbild in den Persönlichen Ordner holen (Download im
+   Browser oder vom USB-Stick kopieren).
+3. Das Archiv dort entpacken (Rechtsklick → *Entpacken → Hierher
+   entpacken*): es entsteht der Ordner `GalaxyQuest`. Nicht auf dem Stick
+   entpacken: dort fehlt dem Programm das Recht, ausgeführt zu werden.
+4. Konsole öffnen und, mit dem Pfad zu deinem Disc-Abbild:
 
-`GalaxyQuest-converter.zip` entpacken (die `README.txt` darin beschreibt die
-Quest mit adb: hier nicht nötig), den Ordner `extracted` hineinlegen und dort
-ein Terminal öffnen (Windows: in die Adresszeile des Explorers klicken, `cmd`
-tippen, Enter). Dann:
+   ```
+   ~/GalaxyQuest/install.sh ~/Downloads/SuperMarioGalaxy.iso
+   ```
 
-```
-py tools/cook/cook.py extracted cooked --with-movies
-```
-
-(macOS/Linux: `python3` statt `py`.) Nach ein paar Minuten liegt der Ordner
-`cooked` (3,3 GB) da. Zeilen mit `note` am Ende sind normal.
-
-Ohne `--with-movies` fehlen Prolog und Abspann (2,3 GB weniger).
-
-## 3. Auf die Frame kopieren
-
-Auf der Frame gehört
-
-- das Programm nach `~/GalaxyQuest/` (also `/home/steamos/GalaxyQuest/`),
-- der *Inhalt* von `cooked` nach `~/.local/share/GalaxyQuest/game/`.
-
-**Variante A – USB-Stick oder SD-Karte, ohne Netzwerk:**
-
-1. `GalaxyQuest-SteamFrame-arm64.tar.gz` und den Ordner `cooked` auf den Stick
-   kopieren.
-2. Frame in den Desktop-Modus schalten, den Stick einstecken.
-3. Im Dateimanager (Dolphin) das Archiv in den Persönlichen Ordner kopieren
-   und dort entpacken (Rechtsklick → *Entpacken → Hierher entpacken*): es
-   entsteht `GalaxyQuest` mit `galaxyquest`, `libopenxr_loader.so.1` und
-   `libjsoncpp.so.26`. (Nicht auf dem Stick entpacken: dort fehlt dem
-   Programm das Recht, ausgeführt zu werden.)
-4. Den *Inhalt* von `cooked` nach `~/.local/share/GalaxyQuest/game` kopieren
-   (versteckte Ordner zeigt Strg+H). Oder `cooked` einfach auf der SD-Karte
-   lassen: findet das Spiel seine Daten nicht im Heimordner, zeigt es beim
-   Start eine Liste der Ordner mit Spieldaten (auch auf SD-Karte und
-   USB-Stick); dort einen auswählen, das Spiel merkt ihn sich.
-
-**Variante B – über das Netzwerk (SSH):**
+**Variante B – vom PC über das Netzwerk (SSH):**
 
 Einmalig auf der Frame im Desktop-Modus eine Konsole öffnen:
 
@@ -86,29 +53,49 @@ passwd                              # Passwort setzen, falls noch keins
 sudo systemctl enable --now sshd
 ```
 
-Dann auf dem PC (Windows-PowerShell oder Linux-Terminal; `frame.local` geht
-meistens, sonst die IP-Adresse aus `ip a` auf der Frame):
+Dann auf dem PC (Windows-PowerShell oder Linux-Terminal), im Ordner mit dem
+Archiv und dem Disc-Abbild (hier `smg.iso`; `frame.local` geht meistens, sonst
+die IP-Adresse aus `ip a` auf der Frame):
 
 ```
-tar -xzf GalaxyQuest-SteamFrame-arm64.tar.gz
-ssh steamos@frame.local "mkdir -p ~/GalaxyQuest ~/.local/share/GalaxyQuest/game"
-scp GalaxyQuest/* steamos@frame.local:GalaxyQuest/
-scp -r cooked/* steamos@frame.local:.local/share/GalaxyQuest/game/
-ssh steamos@frame.local "chmod +x ~/GalaxyQuest/galaxyquest"
+scp GalaxyQuest-SteamFrame-arm64.tar.gz smg.iso steamos@frame.local:
+ssh steamos@frame.local "tar -xzf GalaxyQuest-SteamFrame-arm64.tar.gz && ~/GalaxyQuest/install.sh ~/smg.iso && rm ~/smg.iso"
 ```
 
-## 4. Zu Steam hinzufügen
+Ohne Prolog- und Abspann-Film (2,3 GB weniger) hinten `--no-movies`
+anhängen. Hast du die Disc schon entpackt (Ordner mit `sys` und `files`),
+geht statt des Abbilds auch dieser Ordner.
 
-Im Desktop-Modus: Steam öffnen → *Spiele* → *Ein Nicht-Steam-Spiel zur
-Bibliothek hinzufügen* → *Durchsuchen* → `/home/steamos/GalaxyQuest/galaxyquest`.
-Danach in den *Eigenschaften* des neuen Eintrags:
+## 2. In Steam einrichten
+
+Das Skript trägt das Spiel in Steam ein, wenn Steam läuft (sonst: Steam →
+*Spiele* → *Ein Nicht-Steam-Spiel zur Bibliothek hinzufügen* → *Durchsuchen*
+→ `/home/steamos/GalaxyQuest/galaxyquest`). Danach in den *Eigenschaften* des
+Eintrags:
 
 - Name: `GalaxyQuest`,
 - **„In VR-Bibliothek aufnehmen“ anhaken.**
 
 Zurück in den VR-Modus wechseln und GalaxyQuest aus der Bibliothek starten.
 
-## 5. Bildwiederholrate
+## 3. Ohne install.sh (von Hand)
+
+Auf der Frame gehört das Programm nach `~/GalaxyQuest/`, der *Inhalt* des
+umgewandelten Ordners nach `~/.local/share/GalaxyQuest/game/` (dort direkt
+`sys` und `files`). Umwandeln geht auch auf einem PC mit Python 3.8+: Disc
+mit Dolphin entpacken (Rechtsklick auf das Spiel → *Eigenschaften* →
+*Dateisystem* → Rechtsklick auf die Disc → *Gesamte Disc extrahieren…*), dann
+im Ordner `converter` aus dem Archiv:
+
+```
+python tools/cook/cook.py <entpackte Disc> cooked --with-movies
+```
+
+Findet das Spiel keine Daten im Heimordner, zeigt es beim Start eine Liste
+der Ordner mit Spieldaten (auch auf SD-Karte und USB-Stick); dort einen
+auswählen, das Spiel merkt ihn sich.
+
+## 4. Bildwiederholrate
 
 Das Spiel läuft mit 60 Bildern pro Sekunde und zeigt jedes genau zwei
 Bildwechsel lang, wenn das Headset mit **120 Hz** läuft; beim zweiten dreht
@@ -193,8 +180,8 @@ ARCH=arm64 STEAMRT4_ARM64_SYSROOT=~/steamrt4-arm64-sdk/sysroot ./build_linux.sh
 
 Ergebnis in `build-linux-arm64/`: `galaxyquest`, `libopenxr_loader.so.1`,
 `libjsoncpp.so.26` und daraus gepackt `GalaxyQuest-SteamFrame-arm64.tar.gz`
-(das Release-Archiv). Den Konverter packt `python3 tools/package_converter.py`
-nach `out/GalaxyQuest-converter.zip`. Auf die Frame kopieren:
+(das Release-Archiv, mit `install.sh` aus `platform/linux/` und dem
+Konverter). Ein Entwicklungsstand auf die Frame:
 `tools/push_frame.sh steamos@frame.local [cooked-Ordner]`.
 
 Was sich gegenüber der Quest-Fassung ändert, steht in
