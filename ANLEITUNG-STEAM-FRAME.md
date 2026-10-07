@@ -1,5 +1,7 @@
 # GalaxyQuest auf der Steam Frame
 
+*English: [STEAM-FRAME.md](STEAM-FRAME.md)*
+
 Super Mario Galaxy in VR, nativ auf der **Valve Steam Frame** (SteamOS, arm64):
 der Spielcode des [Petari-Projekts](https://github.com/SMGCommunity/Petari)
 läuft direkt auf dem Prozessor der Frame, das Bild geht über OpenXR an
@@ -158,7 +160,8 @@ Hinweis zum Handgelenksriemen beim Start auf Niederländisch).
   und `files` liegen). *Not converted* heißt: noch mit `cook.py` umwandeln.
 - **Ruckelt:** prüfen, ob SteamVR für GalaxyQuest 120 Hz nutzt (siehe
   oben); im Protokoll zeigen Zeilen mit `missed … refreshes`, wie oft ein
-  Bild zu spät kam.
+  Bild zu spät kam. Andere Programme im Hintergrund (etwa ein Chat-Programm,
+  das Video überträgt) nehmen dem Spiel Rechenzeit.
 - **Bild schliert bei Kopfbewegungen:** in `petari_vr.ini` muss
   `timewarp = 1` gelten (Standard): dann dreht das Spiel jedes der 120
   Bilder pro Sekunde auf die aktuelle Kopfhaltung nach, was SteamVR selbst
