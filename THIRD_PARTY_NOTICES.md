@@ -145,6 +145,38 @@ The app ships `libopenxr_loader.so` from `openxr_loader_for_android` 1.1.63
 which `tools/fetch_openxr.sh` downloads from Maven Central, and is compiled
 against its headers. Licensed under the Apache License 2.0 (below).
 
+## Khronos OpenXR loader and JsonCpp for the Steam Frame
+
+The Linux build for the Steam Frame ships `libopenxr_loader.so.1` 1.1.47
+(The Khronos Group Inc., licensed under the Apache License 2.0, below) and the
+`libjsoncpp.so.26` 1.9.6 it needs, both as built by Debian for Valve's Steam
+Runtime 4 arm64 SDK, and is compiled against the loader's headers. JsonCpp is
+licensed under the MIT License:
+
+```
+Copyright (c) 2007-2010 Baptiste Lepilleur and The JsonCpp Authors
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use, copy,
+modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Android NDK native app glue
 
 The app's launcher (`libmain.so`) is built with `android_native_app_glue.c`

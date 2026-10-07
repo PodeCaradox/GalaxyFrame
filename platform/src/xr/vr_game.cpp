@@ -17,6 +17,7 @@
 #include "../gx/gl_renderer.h"
 #include "../gx/gpu.h"
 #include "port/port.h"
+#include "timewarp.h"
 #include "vr_renderer.h"
 #include "vr_rig.h"
 
@@ -29,11 +30,16 @@ const char* kCommon = R"(
 vec3 toLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
 )";
 
+// uWarp (the composite's timewarp, see timewarp()): the eye image's uv ->
+// the diorama's, homogeneous; vSrc is divided out per pixel (srcUv()).
 const char* kBlitVs = R"(#version 320 es
+uniform highp mat3 uWarp;
 out vec2 vUv;
+out highp vec3 vSrc;
 void main() {
     vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
     vUv = p;
+    vSrc = uWarp * vec3(p, 1.0);
     gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }
 )";
@@ -49,7 +55,9 @@ uniform float uVignette;  // 0 = off .. 1 = strong
 uniform vec4 uWipe;       // closed (0..1), kind (0 fade, 1 ring), ring centre uv
 uniform vec4 uWipeColor;  // linear colour, w = width / height of the eye
 in vec2 vUv;
+in highp vec3 vSrc;
 out vec4 oColor;
+highp vec2 srcUv() { return vSrc.xy / vSrc.z; }  // where the pixel is in the diorama
 %s
 %s
 void main() {
@@ -63,7 +71,7 @@ void main() {
         // A ring closing on its centre (radius in units of the eye's height;
         // 1.6 clears the view from any centre on it).
         float r = (1.0 - uWipe.x) * 1.6;
-        float inside = 1.0 - smoothstep(r - 0.015, r, length((vUv - uWipe.zw) * vec2(uWipeColor.w, 1.0)));
+        float inside = 1.0 - smoothstep(r - 0.015, r, length((srcUv() - uWipe.zw) * vec2(uWipeColor.w, 1.0)));
         c = mix(uWipeColor.rgb, c, inside);
     }
     oColor = vec4(c * uBrightness, 1.0);
@@ -71,7 +79,7 @@ void main() {
 )";
 
 const char* kBlitPlain = R"(
-vec3 sourceColor() { return texture(uTex, vUv).rgb; }
+vec3 sourceColor() { return texture(uTex, srcUv()).rgb; }
 )";
 
 // AMD FidelityFX CAS (contrast adaptive sharpening), after CasFilter in
@@ -125,15 +133,30 @@ vec3 sourceColor() {
 }
 )";
 
+// The timewarp's sharpening, once a game frame (renderEyeScene): kBlitCas1
+// into an image of the diorama's size, still sRGB-encoded, which every
+// refresh's composite then only turns (kBlitPlain).  Its %s are the common
+// code and kBlitCas1.
+const char* kSharpenFs = R"(#version 320 es
+precision mediump float;
+uniform sampler2D uTex;
+in vec2 vUv;
+in highp vec3 vSrc;
+out vec4 oColor;
+%s
+%s
+void main() { oColor = vec4(sourceColor(), 1.0); }
+)";
+
 // The scaled variant: the sharpened results at the four diorama pixels
 // around the eye pixel, blended bilinearly with less weight where the local
-// contrast is high (keeps edges thin).
+// contrast is high (keeps edges thin).  Also the one for a turned picture
+// (the timewarp).
 const char* kBlitCasScaled = R"(
 uniform float uCasPeak;
-uniform highp vec2 uCasScale;
 vec3 casLoad(ivec2 p) { return texelFetch(uTex, clamp(p, ivec2(0), textureSize(uTex, 0) - 1), 0).rgb; }
 vec3 sourceColor() {
-    highp vec2 pp = gl_FragCoord.xy * uCasScale - 0.5;
+    highp vec2 pp = srcUv() * vec2(textureSize(uTex, 0)) - 0.5;
     highp vec2 fp = floor(pp);
     pp -= fp;
     ivec2 sp = ivec2(fp);
@@ -333,10 +356,12 @@ GLint sLayerTex, sLayerMvp, sLayerUvScale;
 // Composite programs: plain, CAS at 1:1, CAS scaling.
 struct BlitProgram {
     GLuint program = 0;
-    GLint tex, brightness, vignette, wipe, wipeColor, casPeak, casScale;
+    GLint tex, brightness, vignette, wipe, wipeColor, casPeak, warp;
 };
 enum { kBlitPlainProgram, kBlitCas1Program, kBlitCasScaledProgram };
 BlitProgram sBlit[3];
+GLuint sSharpenProgram;
+GLint sSharpenTex, sSharpenPeak, sSharpenWarp;
 GLint sLaserMvp, sLaserCorners, sLaserColor, sLaserShape, sLaserRing;
 GLuint sMotionProgram, sMotionQuadProgram, sMotionFbo;
 GLint sMotionDepth, sMotionMatrix, sMotionDepthOverride, sMotionMaxDepth, sMotionTag;
@@ -402,7 +427,14 @@ unsigned sSkipsSeen = 0;
 // Brightness of what is drawn over the view (panels, laser).
 float overlayBrightness() { return (1.0f - sFade) * (1.0f - sWipeDim) * (1.0f - sSkipDim); }
 
-gpu::EfbTarget sEye[2], sHud, sFlat;
+// The eyes' views of the game frame: two scene sets (the timewarp shows one
+// while the next game frame goes into the other), sEye the current one.
+gpu::EfbTarget sEyeSets[2][2], sHud, sFlat;
+gpu::EfbTarget* sEye = sEyeSets[0];
+int sSceneSet = 0;
+vr::EyeInfo sSceneEye[2][2]{};  // [set][eye] the eye each view was rendered for
+gpu::EfbTarget sSharpSets[2][2];  // [set][eye] the view sharpened once (the sharpening setting with the timewarp)
+bool sSceneSharp[2][2]{};         // [set][eye] sSharpSets holds the view
 bool sVrMode = false;
 vr::RigState sRig;
 vr::RigParams sRigParams;
@@ -417,6 +449,7 @@ bool sHighClocks = true;      // ask for Meta's SustainedHigh CPU/GPU levels
 bool sSpaceWarp = true;       // Application SpaceWarp at 120 Hz
 bool sSuperRes = true;        // Meta Quest Super Resolution (eye at render size)
 bool sSharpen = false;        // AMD FidelityFX CAS in the composite
+bool sTimewarp = true;        // the app turns the eye images to each refresh's pose (where the runtime does not)
 float sSharpness = 0.5f;      // its strength, 0..1
 float sMinScale = 0.8f;       // lowest render scale (min_resolution)
 bool sGiantScreen = true;     // gameplay on the giant virtual screen (giant_screen; the default at first start)
@@ -576,7 +609,7 @@ GLuint compile(GLenum type, const char* fmt, bool withCommon) {
     return s;
 }
 
-GLuint link(const char* vs, const char* fs) {
+GLuint linkProgram(const char* vs, const char* fs) {
     GLuint p = glCreateProgram();
     glAttachShader(p, compile(GL_VERTEX_SHADER, vs, false));
     glAttachShader(p, compile(GL_FRAGMENT_SHADER, fs, true));
@@ -590,14 +623,14 @@ BlitProgram linkBlit(const char* source) {
     char fs[8192];
     snprintf(fs, sizeof(fs), kBlitFs, "%s", source);
     BlitProgram b;
-    b.program = link(kBlitVs, fs);
+    b.program = linkProgram(kBlitVs, fs);
     b.tex = glGetUniformLocation(b.program, "uTex");
     b.brightness = glGetUniformLocation(b.program, "uBrightness");
     b.vignette = glGetUniformLocation(b.program, "uVignette");
     b.wipe = glGetUniformLocation(b.program, "uWipe");
     b.wipeColor = glGetUniformLocation(b.program, "uWipeColor");
     b.casPeak = glGetUniformLocation(b.program, "uCasPeak");
-    b.casScale = glGetUniformLocation(b.program, "uCasScale");
+    b.warp = glGetUniformLocation(b.program, "uWarp");
     return b;
 }
 
@@ -922,6 +955,7 @@ vr::Setting sSettings[] = {
     {"super_resolution", 0.0f, 1.0f, 0.0f, FLAG(sSuperRes)},
     {"sharpening", 0.0f, 1.0f, 0.0f, FLAG(sSharpen)},
     {"sharpening_strength", 0.0f, 1.0f, 0.0f, NUMBER(sSharpness)},
+    {"timewarp", 0.0f, 1.0f, 0.0f, FLAG(sTimewarp)},
     {"giant_screen", 0.0f, 1.0f, 0.0f, FLAG(sGiantScreen)},
     {"screen_distance", 1.0f, 20.0f, 0.0f, NUMBER(sScreenDistance)},
     {"passthrough", 0.0f, 1.0f, 0.0f, FLAG(sPassthrough)},
@@ -1026,6 +1060,7 @@ void setPassthroughAvailable(bool available) { sPassAvailable = available; }
 bool highClocks() { return sHighClocks; }
 bool spaceWarp() { return sSpaceWarp; }
 bool superResolution() { return sSuperRes; }
+bool timewarp() { return sTimewarp; }
 bool snapTurn(int dir) {
     if (!sVrMode || !sRig.valid || sRigParams.turnWithCamera || dir == 0) return false;
     sRig.pendingTurn += (dir > 0 ? 1.0f : -1.0f) * 0.78539816f;
@@ -1454,29 +1489,37 @@ void init() {
     sBlit[kBlitPlainProgram] = linkBlit(kBlitPlain);
     sBlit[kBlitCas1Program] = linkBlit(kBlitCas1);
     sBlit[kBlitCasScaledProgram] = linkBlit(kBlitCasScaled);
-    sQuadProgram = link(kQuadVs, kQuadFs);
+    {
+        char fs[8192];
+        snprintf(fs, sizeof(fs), kSharpenFs, "%s", kBlitCas1);
+        sSharpenProgram = linkProgram(kBlitVs, fs);
+        sSharpenTex = glGetUniformLocation(sSharpenProgram, "uTex");
+        sSharpenPeak = glGetUniformLocation(sSharpenProgram, "uCasPeak");
+        sSharpenWarp = glGetUniformLocation(sSharpenProgram, "uWarp");
+    }
+    sQuadProgram = linkProgram(kQuadVs, kQuadFs);
     sQuadTex = glGetUniformLocation(sQuadProgram, "uTex");
     sQuadMvp = glGetUniformLocation(sQuadProgram, "uMvp");
     sQuadOpaque = glGetUniformLocation(sQuadProgram, "uOpaque");
     sQuadBrightness = glGetUniformLocation(sQuadProgram, "uBrightness");
     sQuadAlpha = glGetUniformLocation(sQuadProgram, "uAlpha");
-    sLayerProgram = link(kQuadVs, kLayerFs);
+    sLayerProgram = linkProgram(kQuadVs, kLayerFs);
     sLayerTex = glGetUniformLocation(sLayerProgram, "uTex");
     sLayerMvp = glGetUniformLocation(sLayerProgram, "uMvp");
     sLayerUvScale = glGetUniformLocation(sLayerProgram, "uUvScale");
-    sLaserProgram = link(kLaserVs, kLaserFs);
+    sLaserProgram = linkProgram(kLaserVs, kLaserFs);
     sLaserMvp = glGetUniformLocation(sLaserProgram, "uMvp");
     sLaserCorners = glGetUniformLocation(sLaserProgram, "uCorners");
     sLaserColor = glGetUniformLocation(sLaserProgram, "uColor");
     sLaserShape = glGetUniformLocation(sLaserProgram, "uShape");
     sLaserRing = glGetUniformLocation(sLaserProgram, "uRing");
-    sMotionProgram = link(kBlitVs, kMotionFs);
+    sMotionProgram = linkProgram(kBlitVs, kMotionFs);
     sMotionDepth = glGetUniformLocation(sMotionProgram, "uDepth");
     sMotionMatrix = glGetUniformLocation(sMotionProgram, "uCurToPrev");
     sMotionDepthOverride = glGetUniformLocation(sMotionProgram, "uDepthOverride");
     sMotionMaxDepth = glGetUniformLocation(sMotionProgram, "uMaxDepth");
     sMotionTag = glGetUniformLocation(sMotionProgram, "uTag");
-    sMotionQuadProgram = link(kQuadVs, kMotionQuadFs);
+    sMotionQuadProgram = linkProgram(kQuadVs, kMotionQuadFs);
     sMotionQuadTex = glGetUniformLocation(sMotionQuadProgram, "uTex");
     sMotionQuadMvp = glGetUniformLocation(sMotionQuadProgram, "uMvp");
     sMotionQuadAlphaMin = glGetUniformLocation(sMotionQuadProgram, "uAlphaMin");
@@ -1628,24 +1671,15 @@ void beginFrame(const FrameInfo& frame) {
     sRenderNs = port_host_time_ns() - frameStartNs;
 }
 
-Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int height) {
-    int64_t eyeStartNs = port_host_time_ns();
-    sWipeDim = 0.0f;
-    gpu::Renderer& r = gpu::renderer();
-    beginEyeTimer(r.hasFrame() && sVrMode);
-    const EyeInfo& ei = frame.eyes[eye];
-    xm::Mat4 viewProj = ei.proj * ei.view;
-    Extent used{width, height};
+namespace {
 
+// The eye's view of the game frame, into the current scene set.
+void eyeScene(int eye, const FrameInfo& frame) {
+    gpu::Renderer& r = gpu::renderer();
+    const EyeInfo& ei = frame.eyes[eye];
+    sSceneEye[sSceneSet][eye] = ei;
+    sSceneSharp[sSceneSet][eye] = false;
     if (r.hasFrame() && sVrMode) {
-        // With Super Resolution the diorama goes out at its render size (the
-        // lower left part of the image) and the compositor does the one
-        // scaling to the display; bilinear here first only blurred it.  Not
-        // while the settings panel is up: it and the pause menu are drawn
-        // into the same image, and their text lost a third of its pixels.
-        if (sSuperRes && (sUiLayers || !settingsShown()) && sEye[eye].width <= width && sEye[eye].height <= height) {
-            used = {sEye[eye].width, sEye[eye].height};
-        }
         gpu::EyeView ev;
         ev.index = eye;
         xm::Mat4 eyeFromView = ei.view * sStageFromView;
@@ -1665,7 +1699,89 @@ Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int hei
             sHudDraws = r.hudDrawCount();
         }
         sSnapTaken[eye] = sMotionOn && r.snapshotTaken();
+    } else if (r.hasFrame() && sStereoFrame) {
+        // The eye's picture of the stereo pair.  The pair goes to the
+        // screen's layers once both are drawn (the two eyes may be
+        // rendered a display refresh apart), so they never show
+        // different game frames.
+        gpu::EyeView ev;
+        ev.index = eye;
+        ev.flatStereo = true;
+        ev.stereo[0] = eye == 0 ? sStereoShift : -sStereoShift;
+        ev.stereo[1] = sConvergence;
+        ev.stereo[2] = kStereoNear / sStereoFar;
+        ev.stereo[3] = eye == 0 ? sStereoHudShift : -sStereoHudShift;
+        ev.pointer[0] = ev.stereo[0] * sPointerParallax;
+        ev.pointer[1] = sPointerOnHud ? 1.0f : 0.0f;
+        r.render(sFlatPair[eye], &ev, nullptr, gpu::HudMode::Inline);
+        if (eye == 1) {
+            sFlatFresh = sFlatRightFresh = true;
+            sStereoShown = true;
+            sScaledShown = false;
+            sPictureW = sFlatPair[0].width;
+            sPictureH = sFlatPair[0].height;
+        }
+    } else if (eye == 0 && r.hasFrame()) {
+        r.render(sScaledFrame ? sFlatPair[0] : sFlat, nullptr, nullptr, gpu::HudMode::Inline);
+        sFlatFresh = true;
+        sStereoShown = false;
+        sScaledShown = sScaledFrame;
+        sPictureW = sFlatPair[0].width;
+        sPictureH = sFlatPair[0].height;
+    }
+}
 
+// The timewarp's sharpening: the eye's view in the current scene set,
+// sharpened once into sSharpSets, so each refresh's composite only turns it.
+void presharpen(int eye) {
+    const gpu::EfbTarget& src = sEye[eye];
+    gpu::EfbTarget& dst = sSharpSets[sSceneSet][eye];
+    ensureTarget(dst, src.width, src.height);
+    glBindFramebuffer(GL_FRAMEBUFFER, dst.fbo);
+    const GLenum color[1] = {GL_COLOR_ATTACHMENT0};
+    glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, color);
+    glViewport(0, 0, dst.width, dst.height);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    static const float kIdentity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    glUseProgram(sSharpenProgram);
+    glUniformMatrix3fv(sSharpenWarp, 1, GL_FALSE, kIdentity);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, src.color);
+    glBindSampler(0, 0);
+    glUniform1i(sSharpenTex, 0);
+    glUniform1f(sSharpenPeak, -1.0f / (8.0f + (5.0f - 8.0f) * sSharpness));
+    glBindVertexArray(sVao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    sSceneSharp[sSceneSet][eye] = true;
+}
+
+// Scene set `set`'s eye `eye` into the eye image `fbo`, seen from
+// `display`'s eye, with the overlays over it.
+Extent eyeComposite(int eye, int set, const FrameInfo& display, GLuint fbo, int width, int height) {
+    sWipeDim = 0.0f;
+    gpu::Renderer& r = gpu::renderer();
+    const EyeInfo& ei = display.eyes[eye];
+    xm::Mat4 viewProj = ei.proj * ei.view;
+    Extent used{width, height};
+
+    if (r.hasFrame() && sVrMode) {
+        bool presharpened = sSceneSharp[set][eye];
+        const gpu::EfbTarget& src = presharpened ? sSharpSets[set][eye] : sEyeSets[set][eye];
+        const EyeInfo& ri = sSceneEye[set][eye];  // the eye the view was rendered for
+        // With Super Resolution the diorama goes out at its render size (the
+        // lower left part of the image) and the compositor does the one
+        // scaling to the display; bilinear here first only blurred it.  Not
+        // while the settings panel is up: it and the pause menu are drawn
+        // into the same image, and their text lost a third of its pixels.
+        if (sSuperRes && (sUiLayers || !settingsShown()) && src.width <= width && src.height <= height) {
+            used = {src.width, src.height};
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         // The composite covers the whole image: no need to load its old
         // contents into the tiles.
@@ -1677,22 +1793,26 @@ Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int hei
         glDisable(GL_CULL_FACE);
         glDisable(GL_BLEND);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        float warp[9];
+        bool warped = warpMatrix(ri.orientation, {ri.tanLeft, ri.tanRight, ri.tanUp, ri.tanDown}, ei.orientation,
+                                 {ei.tanLeft, ei.tanRight, ei.tanUp, ei.tanDown}, warp);
         // FidelityFX CAS sharpens the diorama as it goes in (and scales it
-        // when the sizes differ).
-        bool sameSize = used.width == sEye[eye].width && used.height == sEye[eye].height;
-        const BlitProgram& blit = sBlit[!sSharpen ? kBlitPlainProgram : sameSize ? kBlitCas1Program : kBlitCasScaledProgram];
+        // when the sizes differ, or the picture is turned).
+        bool sameSize = !warped && used.width == src.width && used.height == src.height;
+        const BlitProgram& blit = sBlit[!sSharpen || presharpened ? kBlitPlainProgram : sameSize ? kBlitCas1Program : kBlitCasScaledProgram];
         glUseProgram(blit.program);
+        glUniformMatrix3fv(blit.warp, 1, GL_FALSE, warp);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, sEye[eye].color);
+        glBindTexture(GL_TEXTURE_2D, src.color);
         glBindSampler(0, 0);
         glUniform1i(blit.tex, 0);
         glUniform1f(blit.brightness, (1.0f - sFade) * (1.0f - sSkipDim));
         glUniform1f(blit.vignette, sVignette);
         if (sSharpen) {
             glUniform1f(blit.casPeak, -1.0f / (8.0f + (5.0f - 8.0f) * sSharpness));
-            glUniform2f(blit.casScale, (float)sEye[eye].width / used.width, (float)sEye[eye].height / used.height);
         }
-        // The game's screen wipe, across the whole view.
+        // The game's screen wipe, across the whole view (its ring centred in
+        // the diorama's picture).
         int wipeKind;
         float wipeClosed;
         unsigned int wipeRgb;
@@ -1704,8 +1824,8 @@ Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int hei
             const float* p = r.camera().player;
             xm::Vec3 inView = {v[0] * p[0] + v[1] * p[1] + v[2] * p[2] + v[3], v[4] * p[0] + v[5] * p[1] + v[6] * p[2] + v[7],
                                v[8] * p[0] + v[9] * p[1] + v[10] * p[2] + v[11]};
-            xm::Vec3 e = xm::transformPoint(eyeFromView, inView);
-            const xm::Mat4& pr = ei.proj;
+            xm::Vec3 e = xm::transformPoint(ri.view * sStageFromView, inView);
+            const xm::Mat4& pr = ri.proj;
             float clipX = pr.m[0] * e.x + pr.m[4] * e.y + pr.m[8] * e.z + pr.m[12];
             float clipY = pr.m[1] * e.x + pr.m[5] * e.y + pr.m[9] * e.z + pr.m[13];
             float clipW = pr.m[3] * e.x + pr.m[7] * e.y + pr.m[11] * e.z + pr.m[15];
@@ -1723,36 +1843,6 @@ Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int hei
             drawPanel(sHud, viewProj * panelModel(kHudCenter, kHudWidth, (float)sHud.width / sHud.height), false);
         }
     } else {
-        if (r.hasFrame() && sStereoFrame) {
-            // The eye's picture of the stereo pair.  The pair goes to the
-            // screen's layers once both are drawn (the two eyes may be
-            // rendered a display refresh apart), so they never show
-            // different game frames.
-            gpu::EyeView ev;
-            ev.index = eye;
-            ev.flatStereo = true;
-            ev.stereo[0] = eye == 0 ? sStereoShift : -sStereoShift;
-            ev.stereo[1] = sConvergence;
-            ev.stereo[2] = kStereoNear / sStereoFar;
-            ev.stereo[3] = eye == 0 ? sStereoHudShift : -sStereoHudShift;
-            ev.pointer[0] = ev.stereo[0] * sPointerParallax;
-            ev.pointer[1] = sPointerOnHud ? 1.0f : 0.0f;
-            r.render(sFlatPair[eye], &ev, nullptr, gpu::HudMode::Inline);
-            if (eye == 1) {
-                sFlatFresh = sFlatRightFresh = true;
-                sStereoShown = true;
-                sScaledShown = false;
-                sPictureW = sFlatPair[0].width;
-                sPictureH = sFlatPair[0].height;
-            }
-        } else if (eye == 0 && r.hasFrame()) {
-            r.render(sScaledFrame ? sFlatPair[0] : sFlat, nullptr, nullptr, gpu::HudMode::Inline);
-            sFlatFresh = true;
-            sStereoShown = false;
-            sScaledShown = sScaledFrame;
-            sPictureW = sFlatPair[0].width;
-            sPictureH = sFlatPair[0].height;
-        }
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glViewport(0, 0, width, height);
         glDisable(GL_SCISSOR_TEST);
@@ -1776,15 +1866,48 @@ Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int hei
         setupDraw(viewProj);
     }
     drawLaser(ei, viewProj);
-    drawSkipIndicator(frame, viewProj);
+    drawSkipIndicator(display, viewProj);
     glBindVertexArray(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return used;
+}
+
+}  // namespace
+
+Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int height) {
+    int64_t eyeStartNs = port_host_time_ns();
+    beginEyeTimer(gpu::renderer().hasFrame() && sVrMode);
+    eyeScene(eye, frame);
+    Extent used = eyeComposite(eye, sSceneSet, frame, fbo, width, height);
     endEyeTimer();
     sRenderNs += port_host_time_ns() - eyeStartNs;
     if (eye == 1) {
         port_perf_render(sRenderNs, sUploadNs);
     }
     return used;
+}
+
+void setSceneSet(int set) {
+    sSceneSet = set;
+    sEye = sEyeSets[set];
+}
+
+void renderEyeScene(int eye, const FrameInfo& frame) {
+    int64_t eyeStartNs = port_host_time_ns();
+    beginEyeTimer(gpu::renderer().hasFrame() && sVrMode);
+    eyeScene(eye, frame);
+    if (sSharpen && gpu::renderer().hasFrame() && sVrMode) {
+        presharpen(eye);  // once, not in every refresh's composite
+    }
+    endEyeTimer();
+    sRenderNs += port_host_time_ns() - eyeStartNs;
+    if (eye == 1) {
+        port_perf_render(sRenderNs, sUploadNs);
+    }
+}
+
+Extent compositeEye(int eye, int set, const FrameInfo& display, GLuint fbo, int width, int height) {
+    return eyeComposite(eye, set, display, fbo, width, height);
 }
 
 void setMotionSize(int width, int height) {

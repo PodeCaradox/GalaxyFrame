@@ -3,7 +3,7 @@
 #include "revolution/dvd.h"
 #include "revolution/os.h"
 #include "revolution/os/OSExecParams.h"
-#include "revolution/os/OSTIme.h"
+#include "revolution/os/OSTime.h"
 #include "revolution/types.h"
 #include <wstring.h>
 

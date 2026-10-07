@@ -5,6 +5,7 @@
 // big-endian; vertex arrays referenced by index are little-endian (cooked
 // model data, or written by the CPU), except single-byte components.
 // Texture memory stays big-endian and is decoded here.
+#include <math.h>
 #include <string.h>
 
 #include <unordered_map>

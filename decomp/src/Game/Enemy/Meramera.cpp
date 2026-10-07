@@ -228,9 +228,11 @@ namespace NrvMeramera {
     NEW_NERVE(MerameraNrvReadyRestart, Meramera, ReadyRestart);
 }  // namespace NrvMeramera
 
+#ifndef TARGET_PC  // unused, and libstdc++'s <math.h> puts C++20's std::lerp in this namespace
 f32 lerp(f32 start, f32 end, f32 t) {
     return start + (end - start) * t;
 }
+#endif
 
 inline bool Meramera::isSensor(const HitSensor* pSensor, const char* pName) const {
     return getSensor(pName) == pSensor;

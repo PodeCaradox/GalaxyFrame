@@ -1,9 +1,16 @@
 // Host audio output: the game's AI DMA stream (16-bit stereo, right sample
-// first, normally 32 kHz) played through AAudio.  Blocks go into a ring that
-// AAudio's data callback drains at the device's pace; the AI clock
-// (ai_dsp.cpp) keeps the ring topped up.  PETARI_WAV=<path> also records the
-// stream to a WAV file.
+// first, normally 32 kHz) played through AAudio (Android) or ALSA (Linux).
+// Blocks go into a ring that the device drains at its own pace (AAudio's data
+// callback, or a writer thread blocking in ALSA); the AI clock (ai_dsp.cpp)
+// keeps the ring topped up.  PETARI_WAV=<path> also records the stream to a
+// WAV file.
+#ifdef __ANDROID__
 #include <aaudio/AAudio.h>
+#else
+#include <alsa/asoundlib.h>
+
+#include <thread>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,13 +20,20 @@
 #include <mutex>
 #include <vector>
 
+#include "port/heap_routing.h"
 #include "port/port.h"
 #include "revolution/types.h"
 
 namespace {
 
 std::mutex sLock;  // the stream, the resampler and the WAV file
+#ifdef __ANDROID__
 AAudioStream* sStream = nullptr;
+#else
+snd_pcm_t* sStream = nullptr;
+std::thread sWriter;
+std::atomic<bool> sStop{false};
+#endif
 bool sOpenFailed = false;
 std::atomic<bool> sDisconnected{false};
 int32_t sDeviceRate = 0;
@@ -138,10 +152,8 @@ void writeWavHeader(FILE* f, u32 frames, u32 rate) {
     fseek(f, 0, SEEK_END);
 }
 
-// AAudio's real-time thread: copies queued frames out, silence when there
-// are none.
-aaudio_data_callback_result_t dataCallback(AAudioStream*, void*, void* audioData, int32_t numFrames) {
-    s16* out = (s16*)audioData;
+// The device's thread: copies queued frames out, silence when there are none.
+void pullFrames(s16* out, int32_t numFrames) {
     u32 r = sRingRead.load(std::memory_order_relaxed);
     u32 avail = sRingWrite.load(std::memory_order_acquire) - r;
     u32 n = avail < (u32)numFrames ? avail : (u32)numFrames;
@@ -160,6 +172,11 @@ aaudio_data_callback_result_t dataCallback(AAudioStream*, void*, void* audioData
         sPlaying = true;
     }
     sRingRead.store(r + n, std::memory_order_release);
+}
+
+#ifdef __ANDROID__
+aaudio_data_callback_result_t dataCallback(AAudioStream*, void*, void* audioData, int32_t numFrames) {
+    pullFrames((s16*)audioData, numFrames);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
@@ -205,6 +222,65 @@ bool openStream(u32 rate) {
     return true;
 }
 
+void closeStream() {
+    AAudioStream_close(sStream);
+    sStream = nullptr;
+}
+#else
+const int32_t kDeviceRate = 48000;
+const int32_t kPeriodFrames = 240;  // 5 ms
+const unsigned kLatencyUs = 30000;  // ALSA's own buffer, on top of the ring
+
+// Blocks in snd_pcm_writei, so the device paces it as AAudio's callback is
+// paced; a device that goes away ends it and port_audio_submit reopens.
+void writerLoop(snd_pcm_t* pcm) {
+    s16 buf[kPeriodFrames * 2];
+    while (!sStop.load(std::memory_order_relaxed)) {
+        pullFrames(buf, kPeriodFrames);
+        snd_pcm_sframes_t n = snd_pcm_writei(pcm, buf, kPeriodFrames);
+        if (n < 0) {
+            n = snd_pcm_recover(pcm, (int)n, 1);
+        }
+        if (n < 0) {
+            port_log("audio: ALSA write failed: %s", snd_strerror((int)n));
+            sDisconnected = true;
+            return;
+        }
+    }
+}
+
+bool openStream(u32 rate) {
+    snd_pcm_t* pcm = nullptr;
+    int r = snd_pcm_open(&pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
+    if (r >= 0) {
+        r = snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 2, kDeviceRate, 1, kLatencyUs);
+    }
+    if (r < 0) {
+        port_log("audio: ALSA open failed: %s", snd_strerror(r));
+        if (pcm) snd_pcm_close(pcm);
+        return false;
+    }
+    sStream = pcm;
+    sDeviceRate = kDeviceRate;
+    sRingRead.store(sRingWrite.load());
+    sResampler = Resampler();
+    sStop = false;
+    {
+        PortHostAllocScope host;  // called on a game thread
+        sWriter = std::thread(writerLoop, pcm);
+    }
+    port_log("audio: ALSA %d Hz (source %u Hz), %u ms device buffer", sDeviceRate, rate, kLatencyUs / 1000);
+    return true;
+}
+
+void closeStream() {
+    sStop = true;
+    if (sWriter.joinable()) sWriter.join();
+    snd_pcm_close(sStream);
+    sStream = nullptr;
+}
+#endif
+
 }  // namespace
 
 extern "C" void port_audio_submit(const s16* rightLeft, u32 frames, u32 rate) {
@@ -237,8 +313,7 @@ extern "C" void port_audio_submit(const s16* rightLeft, u32 frames, u32 rate) {
 
     if (sStream && sDisconnected.exchange(false)) {
         port_log("audio: output device disconnected, reopening");
-        AAudioStream_close(sStream);
-        sStream = nullptr;
+        closeStream();
     }
     if (!sStream && !sOpenFailed) {
         sOpenFailed = !openStream(rate);
@@ -283,7 +358,9 @@ extern "C" int port_audio_underruns(void) { return sUnderruns.load(); }
 // timer).
 extern "C" int64_t port_audio_queued_ns(void) {
     std::lock_guard<std::mutex> lock(sLock);
-    if (!sStream || sDeviceRate <= 0) return sOpenFailed ? -1 : 0;
+    // A lost device drains nothing: report it empty, so the AI submits the
+    // next block and port_audio_submit reopens the device.
+    if (!sStream || sDeviceRate <= 0 || sDisconnected) return sOpenFailed ? -1 : 0;
     u32 queued = sRingWrite.load(std::memory_order_relaxed) - sRingRead.load(std::memory_order_acquire);
     return (int64_t)queued * 1000000000ll / sDeviceRate;
 }

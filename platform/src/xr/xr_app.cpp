@@ -4,12 +4,17 @@
 // Quest requirements verified against Meta's docs (2026-09-28): Khronos loader
 // initialised through xrInitializeLoaderKHR + XrLoaderInitInfoAndroidKHR,
 // XR_KHR_android_create_instance, Touch Plus via XR_META_touch_controller_plus.
+// On Linux (Steam Frame) the GLES context reaches the runtime through
+// XR_MNDX_egl_enable, which SteamVR offers alongside XR_KHR_opengl_es_enable.
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl32.h>
+#ifdef __ANDROID__
 #include <android/log.h>
 #include <android_native_app_glue.h>
 #include <jni.h>
+#endif
+#include <unistd.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,7 +25,11 @@
 #include <thread>
 #include <vector>
 
+#ifdef __ANDROID__
 #define XR_USE_PLATFORM_ANDROID
+#else
+#define XR_USE_PLATFORM_EGL
+#endif
 #define XR_USE_GRAPHICS_API_OPENGL_ES
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
@@ -57,7 +66,9 @@ struct Swapchain {
 };
 
 struct App {
+#ifdef __ANDROID__
     android_app* android = nullptr;
+#endif
 
     // EGL
     EGLDisplay display = EGL_NO_DISPLAY;
@@ -74,7 +85,9 @@ struct App {
     // updateAppSpace).
     XrSpace appSpace = XR_NULL_HANDLE;
     XrSpace localSpace = XR_NULL_HANDLE, viewSpace = XR_NULL_HANDLE;
-    bool facePlayerDue = false;  // a session began, or the player recentred the view: the app's space is set to the head's pose
+    bool facePlayerDue = false;  // a session became visible, or the player recentred the view: the app's space is set to the head's pose
+    bool facedThisSession = false;  // the session has been visible
+    int64_t synchronizedAt = 0;     // when the session last fell back to SYNCHRONIZED (SteamVR: the headset taken off)
     XrTime facePlayerAfter = 0;  // not before this time (when a recentring takes effect)
     // A session's first seconds: the head's pose in LOCAL is watched for a
     // jump (the headset finding its place in the room after waking up).
@@ -85,7 +98,7 @@ struct App {
     XrVector3f lastHeadPos{};
     XrSessionState state = XR_SESSION_STATE_UNKNOWN;
     bool sessionRunning = false;
-    bool focused = false;
+    bool focused = true;  // the first state change pauses the game until the session has focus
     bool pausedInGameplay = false;  // focus was lost during ordinary gameplay
     uint32_t dpad = 0;              // D-pad direction held by the right stick
     bool dpadTurned = false;        // that flick was a snap turn of the diorama, not the D-pad
@@ -93,6 +106,7 @@ struct App {
     int lastRumble = 0;
     bool hasRefreshRate = false;
     bool hasTouchPlus = false;
+    bool hasFrameController = false;  // XR_VALVE_frame_controller_interaction (Steam Frame)
     bool hasPerfSettings = false;
     bool hasSpaceWarp = false;  // XR_FB_space_warp enabled, with its swapchains
     bool hasLayerSettings = false;  // XR_FB_composition_layer_settings (Super Resolution)
@@ -131,11 +145,19 @@ struct App {
     int heldSet = -1;        // paired refreshes: set whose left eye image is acquired and rendered, not yet released
     uint32_t heldIdx = 0;
     XrTime setTime = 0;      // display time the game frame picked up is rendered for
+    // The app's timewarp (vr::timewarp(), where the runtime does not turn an
+    // image to the head's newest pose: SteamVR): the game frame's eyes go
+    // into scene sets (vr::renderEyeScene) instead of swapchain images, and
+    // every refresh composites the set on show into swapchain set 0.
+    bool appTimewarp = false;
+    int sceneShown = -1;  // scene set composited each refresh
+    int sceneDone = -1;   // scene set finished, on show from the next refresh on
     XrPosef setPose[2][2];  // [set][eye] pose and field of view each image was rendered with
     XrFovf setFov[2][2];
     XrExtent2Di setRect[2][2];  // [set][eye] part of each image rendered (vr::renderEye)
     vr::FrameInfo setFrame{};  // the game frame picked up (from its update refresh)
     bool paired = false;       // the display refreshes at 120 Hz: game frames take two refreshes each
+    int pairedChange = 0;      // frames the period has disagreed with `paired` (SteamVR)
     XrTime lastDisplayTime = 0;
     int skippedRefreshes = 0;  // refreshes the frame loop missed (logged)
     int lateRefreshes = 0;     // of those, missed while the frame loop's own work ran late
@@ -152,6 +174,7 @@ struct App {
     XrActionSet actionSet = XR_NULL_HANDLE;
     XrAction moveAction, lookAction, aAction, bAction, xAction, yAction, triggerAction, gripAction, menuAction, stickClickAction,
         aimPoseAction, hapticAction;
+    XrAction dpadAction[4];  // up, down, left, right: the Steam Frame's left D-pad
     XrPath handPath[2];
     XrSpace aimSpace[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
 
@@ -213,7 +236,16 @@ void loadDebugEnv(const std::string& path) {
 // EGL
 // ---------------------------------------------------------------------------
 void initEgl(App& a) {
+#ifdef __ANDROID__
     a.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+#else
+    // Off-screen, whatever the session's window system: the runtime shows the
+    // images, and Mesa's Wayland platform has no pbuffer configs.
+    a.display = eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
+    if (a.display == EGL_NO_DISPLAY) {
+        a.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    }
+#endif
     eglInitialize(a.display, nullptr, nullptr);
     const EGLint cfgAttr[] = {EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0,
                               EGL_SAMPLES, 0, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE};
@@ -244,20 +276,33 @@ bool hasExtension(const std::vector<XrExtensionProperties>& exts, const char* na
     return false;
 }
 
+// Newer than the OpenXR headers the build uses; its profile's paths are
+// accepted only with the extension enabled.
+const char* const kFrameControllerExtension = "XR_VALVE_frame_controller_interaction";
+
 void initInstance(App& a) {
+#ifdef __ANDROID__
     PFN_xrInitializeLoaderKHR initLoader = nullptr;
     XR_CHECK(xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction*)&initLoader));
     XrLoaderInitInfoAndroidKHR loaderInfo{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
     loaderInfo.applicationVM = a.android->activity->vm;
     loaderInfo.applicationContext = a.android->activity->clazz;
     XR_CHECK(initLoader((const XrLoaderInitInfoBaseHeaderKHR*)&loaderInfo));
+#endif
 
     uint32_t count = 0;
     XR_CHECK(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr));
     std::vector<XrExtensionProperties> exts(count, {XR_TYPE_EXTENSION_PROPERTIES});
     XR_CHECK(xrEnumerateInstanceExtensionProperties(nullptr, count, &count, exts.data()));
 
+#ifdef __ANDROID__
     std::vector<const char*> enable = {XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME, XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME};
+#else
+    if (!hasExtension(exts, XR_MNDX_EGL_ENABLE_EXTENSION_NAME)) {
+        port_fatal("the OpenXR runtime has no %s: GLES needs it on Linux", XR_MNDX_EGL_ENABLE_EXTENSION_NAME);
+    }
+    std::vector<const char*> enable = {XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME, XR_MNDX_EGL_ENABLE_EXTENSION_NAME};
+#endif
     a.hasRefreshRate = hasExtension(exts, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     if (a.hasRefreshRate) {
         enable.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
@@ -265,6 +310,10 @@ void initInstance(App& a) {
     a.hasTouchPlus = hasExtension(exts, XR_META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME);
     if (a.hasTouchPlus) {
         enable.push_back(XR_META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME);
+    }
+    a.hasFrameController = hasExtension(exts, kFrameControllerExtension);
+    if (a.hasFrameController) {
+        enable.push_back(kFrameControllerExtension);
     }
     a.hasPerfSettings = hasExtension(exts, XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME);
     if (a.hasPerfSettings) {
@@ -307,12 +356,13 @@ void initInstance(App& a) {
         port_log("XR runtime extensions:%s", names.substr(i, 900).c_str());
     }
 
+    XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
+#ifdef __ANDROID__
     XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
     androidInfo.applicationVM = a.android->activity->vm;
     androidInfo.applicationActivity = a.android->activity->clazz;
-
-    XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
     ci.next = &androidInfo;
+#endif
     strcpy(ci.applicationInfo.applicationName, "GalaxyQuest");
     ci.applicationInfo.applicationVersion = 1;
     strcpy(ci.applicationInfo.engineName, "Petari");
@@ -404,6 +454,36 @@ void requestPerformanceLevels(App& a) {
     port_log("performance levels: CPU and GPU sustained high requested (%d, %d)", (int)cpu, (int)gpu);
 }
 
+#ifndef __ANDROID__
+// SteamVR offers an app only the refresh rate it runs at: it sets the rate
+// per app from its own settings.  So the app's rate goes in there, as
+// SteamVR's per-application video settings would put it (with SteamVR's
+// vrcmd), and SteamVR switches to it at once.  The entry is Steam's app id
+// for a shortcut, else the one SteamVR makes for an OpenXR app started
+// outside Steam.
+void setSteamVrRefreshRate(float hz) {
+    static float sAsked = 0.0f;
+    const char* vrcmd = "/opt/steamvr/bin/linuxarm64/vrcmd";
+    if (hz == sAsked || access(vrcmd, X_OK) != 0) {
+        return;
+    }
+    sAsked = hz;
+    const char* id = getenv("SteamAppId");
+    std::string key = id && *id && strcmp(id, "0") != 0 ? std::string("steam.app.") + id : "system.generated.openxr.galaxyquest.galaxyquest";
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "LD_PRELOAD= LD_LIBRARY_PATH=/opt/steamvr/bin/linuxarm64 %s --set-settings-float %s.preferredRefreshRate %.0f >/dev/null 2>&1",
+             vrcmd, key.c_str(), hz);
+    port_log("display refresh rate: SteamVR sets it per app; asking for %.0f Hz (%s)", hz, key.c_str());
+    PortHostAllocScope hostAlloc;
+    std::thread([command = std::string(cmd)] {
+        PortHostAllocScope scope;
+        if (system(command.c_str()) != 0) {
+            port_log("display refresh rate: vrcmd failed");
+        }
+    }).detach();
+}
+#endif
+
 // Asks for the refresh rate in the settings (120 Hz by default: a whole two
 // refreshes per 60 Hz game frame), falling back to 72 Hz.
 void requestRefreshRate(App& a) {
@@ -416,7 +496,14 @@ void requestRefreshRate(App& a) {
         if (XR_SUCCEEDED(a.xrEnumerateDisplayRefreshRatesFB(a.session, 0, &n, nullptr)) && n > 0) {
             std::vector<float> rates(n);
             a.xrEnumerateDisplayRefreshRatesFB(a.session, n, &n, rates.data());
+#ifndef __ANDROID__
+            // SteamVR lists only the rate it runs at; the Steam Frame's
+            // others are reached through its settings (setSteamVrRefreshRate).
+            const float kFrameRates[] = {72.0f, 90.0f, 120.0f, 144.0f};
+            vr::setRefreshRates(n > 1 ? rates.data() : kFrameRates, n > 1 ? (int)n : 4);  // for the settings panel
+#else
             vr::setRefreshRates(rates.data(), (int)n);  // for the settings panel
+#endif
             for (float r : rates) {
                 char buf[16];
                 snprintf(buf, sizeof(buf), " %.0f", r);
@@ -428,9 +515,15 @@ void requestRefreshRate(App& a) {
     a.requestedHz = want;
     XrResult r = a.xrRequestDisplayRefreshRateFB(a.session, want);
     port_log("display refresh rates:%s Hz; requested %.0f Hz: %d", list.c_str(), want, (int)r);
+#ifdef __ANDROID__
     if (XR_FAILED(r)) {
         a.xrRequestDisplayRefreshRateFB(a.session, 72.0f);
     }
+#else
+    if (XR_FAILED(r)) {
+        setSteamVrRefreshRate(want);
+    }
+#endif
     // The rate now (a change arrives as an event).
     if (a.xrGetDisplayRefreshRateFB && XR_SUCCEEDED(a.xrGetDisplayRefreshRateFB(a.session, &a.displayHz))) {
         port_log("display refresh rate now %.0f Hz", a.displayHz);
@@ -499,6 +592,15 @@ XrPath path(App& a, const char* s) {
     return p;
 }
 
+void suggestBindings(App& a, const char* profile, const std::vector<XrActionSuggestedBinding>& b) {
+    XrInteractionProfileSuggestedBinding s{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+    s.interactionProfile = path(a, profile);
+    s.suggestedBindings = b.data();
+    s.countSuggestedBindings = (uint32_t)b.size();
+    XrResult r = xrSuggestInteractionProfileBindings(a.instance, &s);
+    port_log("bindings for %s: %d", profile, (int)r);
+}
+
 void suggest(App& a, const char* profile, bool touchPlus) {
     std::vector<XrActionSuggestedBinding> b = {
         {a.moveAction, path(a, "/user/hand/left/input/thumbstick")},
@@ -520,12 +622,42 @@ void suggest(App& a, const char* profile, bool touchPlus) {
         {a.hapticAction, path(a, "/user/hand/right/output/haptic")},
     };
     (void)touchPlus;
-    XrInteractionProfileSuggestedBinding s{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
-    s.interactionProfile = path(a, profile);
-    s.suggestedBindings = b.data();
-    s.countSuggestedBindings = (uint32_t)b.size();
-    XrResult r = xrSuggestInteractionProfileBindings(a.instance, &s);
-    port_log("bindings for %s: %d", profile, (int)r);
+    suggestBindings(a, profile, b);
+}
+
+// The Steam Frame's controllers: A, B, X and Y all sit on the right one, the
+// left has a D-pad and View.  The buttons keep their Touch roles (X and View
+// are -, Menu is +, B and Y spin), and the D-pad works as the right stick
+// does (updateInput).
+void suggestFrame(App& a) {
+    std::vector<XrActionSuggestedBinding> b = {
+        {a.moveAction, path(a, "/user/hand/left/input/thumbstick")},
+        {a.lookAction, path(a, "/user/hand/right/input/thumbstick")},
+        {a.aAction, path(a, "/user/hand/right/input/a/click")},
+        {a.bAction, path(a, "/user/hand/right/input/b/click")},
+        {a.xAction, path(a, "/user/hand/right/input/x/click")},
+        {a.xAction, path(a, "/user/hand/left/input/view/click")},
+        {a.yAction, path(a, "/user/hand/right/input/y/click")},
+        {a.triggerAction, path(a, "/user/hand/left/input/trigger/value")},
+        {a.triggerAction, path(a, "/user/hand/right/input/trigger/value")},
+        {a.gripAction, path(a, "/user/hand/left/input/squeeze/value")},
+        {a.gripAction, path(a, "/user/hand/right/input/squeeze/value")},
+        {a.menuAction, path(a, "/user/hand/right/input/menu/click")},
+        {a.stickClickAction, path(a, "/user/hand/left/input/thumbstick/click")},
+        {a.stickClickAction, path(a, "/user/hand/right/input/thumbstick/click")},
+        {a.dpadAction[0], path(a, "/user/hand/left/input/dpad_up/click")},
+        {a.dpadAction[1], path(a, "/user/hand/left/input/dpad_down/click")},
+        {a.dpadAction[2], path(a, "/user/hand/left/input/dpad_left/click")},
+        {a.dpadAction[3], path(a, "/user/hand/left/input/dpad_right/click")},
+        {a.aimPoseAction, path(a, "/user/hand/left/input/aim/pose")},
+        {a.aimPoseAction, path(a, "/user/hand/right/input/aim/pose")},
+        {a.hapticAction, path(a, "/user/hand/left/output/haptic")},
+        {a.hapticAction, path(a, "/user/hand/right/output/haptic")},
+    };
+    // Valve's documented name, and the older one SteamVR before 2.15.1 knows
+    // (current versions take both).
+    suggestBindings(a, "/interaction_profiles/valve/frame_controller_valve", b);
+    suggestBindings(a, "/interaction_profiles/valve/frame_controller", b);
 }
 
 void initActions(App& a) {
@@ -547,15 +679,27 @@ void initActions(App& a) {
     a.stickClickAction = makeAction(a, "stick_click", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
     a.aimPoseAction = makeAction(a, "aim_pose", XR_ACTION_TYPE_POSE_INPUT, true);
     a.hapticAction = makeAction(a, "haptic", XR_ACTION_TYPE_VIBRATION_OUTPUT, true);
+    a.dpadAction[0] = makeAction(a, "dpad_up", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
+    a.dpadAction[1] = makeAction(a, "dpad_down", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
+    a.dpadAction[2] = makeAction(a, "dpad_left", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
+    a.dpadAction[3] = makeAction(a, "dpad_right", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
 
     if (a.hasTouchPlus) {
         suggest(a, "/interaction_profiles/meta/touch_controller_plus", true);
     }
     suggest(a, "/interaction_profiles/oculus/touch_controller", false);
+    if (a.hasFrameController) {
+        suggestFrame(a);
+    }
 }
 
 void initSession(App& a) {
+#ifdef __ANDROID__
     XrGraphicsBindingOpenGLESAndroidKHR binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR};
+#else
+    XrGraphicsBindingEGLMNDX binding{XR_TYPE_GRAPHICS_BINDING_EGL_MNDX};
+    binding.getProcAddress = (PFN_xrEglGetProcAddressMNDX)eglGetProcAddress;
+#endif
     binding.display = a.display;
     binding.config = a.config;
     binding.context = a.context;
@@ -847,6 +991,12 @@ void updateInput(App& a, XrTime time) {
     // right turns the view to the right.  Up is the first-person view.  A
     // direction engages past 0.7 and releases below 0.4, one press per flick.
     XrVector2f look = getVec2(a, a.lookAction);
+    if (a.hasFrameController) {  // the Steam Frame's left D-pad, as the stick
+        if (getBool(a, a.dpadAction[0])) look = {0.0f, 1.0f};
+        if (getBool(a, a.dpadAction[1])) look = {0.0f, -1.0f};
+        if (getBool(a, a.dpadAction[2])) look = {-1.0f, 0.0f};
+        if (getBool(a, a.dpadAction[3])) look = {1.0f, 0.0f};
+    }
     float lx = fabsf(look.x), ly = fabsf(look.y);
     if (a.dpad == 0) {
         if (lx > 0.7f && lx >= ly) {
@@ -864,9 +1014,15 @@ void updateInput(App& a, XrTime time) {
     // Spin: B or Y, or flicking the right controller like a Wii Remote,
     // produces the acceleration spike the game reads as a remote shake (some
     // objects only answer that one); flicking the left controller shakes the
-    // Nunchuk, which also spins.
+    // Nunchuk, which also spins.  A flick is the controller moving fast, or a
+    // quick turn of the wrist (it shakes a Wii Remote as much).  Without
+    // velocities from the runtime the speed comes from where the controller
+    // was the update before.
     static int spinFrames = 0, nunSpinFrames = 0;
     static XrTime lastFlick[2] = {0, 0};
+    static XrVector3f lastPos[2];
+    static XrTime lastPosTime[2] = {0, 0};
+    static int flicksLogged = 0;
     if (getBool(a, a.bAction) || getBool(a, a.yAction)) {
         spinFrames = 6;
     }
@@ -874,12 +1030,30 @@ void updateInput(App& a, XrTime time) {
         XrSpaceVelocity vel{XR_TYPE_SPACE_VELOCITY};
         XrSpaceLocation vloc{XR_TYPE_SPACE_LOCATION};
         vloc.next = &vel;
-        if (XR_SUCCEEDED(xrLocateSpace(a.aimSpace[h], a.appSpace, time, &vloc)) && (vel.velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT)) {
+        if (XR_FAILED(xrLocateSpace(a.aimSpace[h], a.appSpace, time, &vloc)) || !(vloc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
+            lastPosTime[h] = 0;
+            continue;
+        }
+        const XrVector3f& p = vloc.pose.position;
+        float speed = 0.0f, turn = 0.0f;  // m/s, rad/s
+        if (vel.velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) {
             const XrVector3f& v = vel.linearVelocity;
-            float speed = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
-            if (speed > 2.5f && time - lastFlick[h] > 300000000) {  // m/s; 0.3 s between spins
-                (h == 1 ? spinFrames : nunSpinFrames) = 6;
-                lastFlick[h] = time;
+            speed = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+        } else if (lastPosTime[h] && time > lastPosTime[h]) {
+            float dx = p.x - lastPos[h].x, dy = p.y - lastPos[h].y, dz = p.z - lastPos[h].z;
+            speed = sqrtf(dx * dx + dy * dy + dz * dz) / ((time - lastPosTime[h]) * 1e-9f);
+        }
+        if (vel.velocityFlags & XR_SPACE_VELOCITY_ANGULAR_VALID_BIT) {
+            const XrVector3f& w = vel.angularVelocity;
+            turn = sqrtf(w.x * w.x + w.y * w.y + w.z * w.z);
+        }
+        lastPos[h] = p;
+        lastPosTime[h] = time;
+        if ((speed > 2.5f || turn > 12.0f) && time - lastFlick[h] > 300000000) {  // 0.3 s between spins
+            (h == 1 ? spinFrames : nunSpinFrames) = 6;
+            lastFlick[h] = time;
+            if (flicksLogged++ < 10) {
+                port_log("vr: %s controller flicked (%.1f m/s, %.0f deg/s): spin", h == 1 ? "right" : "left", speed, turn * 57.3f);
             }
         }
     }
@@ -1049,10 +1223,24 @@ void handleEvents(App& a, bool& quit) {
                 bi.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
                 XR_CHECK(xrBeginSession(a.session, &bi));
                 a.sessionRunning = true;
-                a.facePlayerDue = true;
-                a.faceWatchStart = true;
+                a.facedThisSession = false;
                 requestRefreshRate(a);
                 requestPerformanceLevels(a);
+            } else if (a.state == XR_SESSION_STATE_SYNCHRONIZED) {
+                a.synchronizedAt = port_host_time_ns();
+            } else if (a.state == XR_SESSION_STATE_VISIBLE) {
+                // The view starts where the player faces when they first see
+                // the session, and again when they put the headset back on:
+                // SteamVR keeps the session of a headset nobody wears
+                // SYNCHRONIZED (Meta's runtime stops it).  SteamVR's short
+                // dips through SYNCHRONIZED and the system menu leave the view.
+                bool backOn = a.synchronizedAt && port_host_time_ns() - a.synchronizedAt > 2000000000ll;
+                a.synchronizedAt = 0;
+                if (!a.facedThisSession || backOn) {
+                    a.facePlayerDue = true;
+                    a.faceWatchStart = true;
+                    a.facedThisSession = true;
+                }
             } else if (a.state == XR_SESSION_STATE_STOPPING) {
                 xrEndSession(a.session);
                 a.sessionRunning = false;
@@ -1205,6 +1393,10 @@ vr::EyeInfo eyeInfo(const App& a, const XrView& v, int e) {
     eye.view = xm::inversePose(q, p);
     eye.position = p;
     eye.orientation = q;
+    eye.tanLeft = tanf(v.fov.angleLeft);
+    eye.tanRight = tanf(v.fov.angleRight);
+    eye.tanUp = tanf(v.fov.angleUp);
+    eye.tanDown = tanf(v.fov.angleDown);
     eye.width = a.eyes[0][e].width;
     eye.height = a.eyes[0][e].height;
     return eye;
@@ -1365,6 +1557,30 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
     }
 }
 
+// The app's timewarp: both eyes of the scene set on show into swapchain set
+// 0, turned to the head's pose at `time` (this refresh's display time).
+void compositeShown(App& a, XrTime time) {
+    XrView views[2];
+    locateViews(a, time, views);
+    vr::FrameInfo display = frameInfo(a, views, time);
+    uint32_t idx[2];
+    for (int e = 0; e < 2; e++) {
+        idx[e] = acquireImage(a.eyes[0][e]);
+    }
+    for (int e = 0; e < 2; e++) {
+        Swapchain& sc = a.eyes[0][e];
+        vr::Extent used = vr::compositeEye(e, a.sceneShown, display, sc.fbos[idx[e]], sc.width, sc.height);
+        a.setRect[0][e] = {used.width, used.height};
+        a.setPose[0][e] = views[e].pose;
+        a.setFov[0][e] = views[e].fov;
+    }
+    maybeSaveShot(a, 0, idx);
+    for (int e = 0; e < 2; e++) {
+        releaseImage(a.eyes[0][e]);
+    }
+    a.shownSet = 0;
+}
+
 // Frame pacing.  The game runs at 60 Hz.  At the default 120 Hz display
 // refresh ("paired" refreshes), every game frame stays on screen for exactly
 // two refreshes.  Refreshes alternate between two steps: the first picks up
@@ -1394,6 +1610,28 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
 // refresh_rate setting) both eyes are rendered every refresh from the
 // newest game frame, and the game keeps its own 59.94 Hz clock: frames then
 // alternate between one and two refreshes, which makes moving things judder.
+//
+// SteamVR shows an eye image as it was rendered: it does not turn it to the
+// head's pose of each refresh as Meta's compositor does, so at 120 Hz every
+// game frame stood still for two refreshes while the head turned (the view
+// stepped at 60 Hz, a smear on every head movement).  There the app does it
+// (the timewarp setting): the paired refreshes render the game frame's eyes
+// into a scene set instead (vr::renderEyeScene), and every refresh
+// composites the set finished before, turned to that refresh's pose
+// (compositeShown), into swapchain set 0.
+// GPU time of a refresh beside its eye: the two composites, and SteamVR's
+// compositor on the same GPU (it reports no counter of its own), about.
+const float kTimewarpCompositeMs = 2.0f;
+// The timewarp's scene sees this much (radians) beyond each edge of the
+// display's view, so a picture turned to a later pose still fills it (the
+// head turns 2.3 degrees in two refreshes at 140 degrees a second).
+const float kTimewarpMargin = 0.04f;
+void widenView(XrView& v) {
+    v.fov.angleLeft -= kTimewarpMargin;
+    v.fov.angleRight += kTimewarpMargin;
+    v.fov.angleUp += kTimewarpMargin;
+    v.fov.angleDown -= kTimewarpMargin;
+}
 void renderFrame(App& a) {
     XrFrameWaitInfo wi{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState fs{XR_TYPE_FRAME_STATE};
@@ -1422,10 +1660,28 @@ void renderFrame(App& a) {
     // loop's instead while SpaceWarp halves it).
     XrDuration refresh = warp ? (XrDuration)(1e9 / a.displayHz) : period;
     bool paired = !warp && period > 7900000 && period < 8800000;  // 120 Hz
-    if (paired != a.paired) {
-        port_log("vr: display period %.2f ms: %s", period / 1e6,
-                 paired ? "each game frame spans two refreshes" : warp ? "SpaceWarp" : "game frames follow the display loosely");
+#ifndef __ANDROID__
+    // SteamVR runs a late app at half the refresh for a while (a period of
+    // 16.67 ms) and back: the pacing changes only once a new period has held
+    // for 30 frames, not on every late one (each change starts the paired
+    // refreshes over).
+    if (paired != a.paired && ++a.pairedChange < 30) {
+        paired = a.paired;
+    } else {
+        a.pairedChange = 0;  // agreed, or changes now
+    }
+#endif
+#ifdef __ANDROID__
+    bool timewarp = false;  // Meta's compositor does it
+#else
+    bool timewarp = paired && vr::timewarp();
+#endif
+    if (paired != a.paired || timewarp != a.appTimewarp) {
+        port_log("vr: display period %.2f ms: %s%s", period / 1e6,
+                 paired ? "each game frame spans two refreshes" : warp ? "SpaceWarp" : "game frames follow the display loosely",
+                 timewarp ? ", each refresh turned to the head's pose (timewarp)" : "");
         a.paired = paired;
+        a.appTimewarp = timewarp;
     }
     if (a.lastDisplayTime != 0 && refresh > 0) {
         int64_t steps = (int64_t)llround((double)(fs.predictedDisplayTime - a.lastDisplayTime) / (double)refresh);
@@ -1519,6 +1775,46 @@ void renderFrame(App& a) {
         a.shownSet = s;
         a.renderSet = s ^ 1;  // for the paired refreshes, should SpaceWarp stop
         warpFrame = true;
+    } else if (timewarp) {
+        if (a.heldSet >= 0) {
+            dropHeldEye(a);  // a half-rendered set from the paired refreshes without it
+        }
+        if (!a.renderDue) {
+            // First step: the scene set finished on the last refresh goes on
+            // show, and the newest game frame's left eye into the other.
+            if (a.sceneDone >= 0) {
+                a.sceneShown = a.sceneDone;
+                a.sceneDone = -1;
+            }
+            a.setTime = fs.predictedDisplayTime + period * 5 / 2;
+            updateInput(a, a.setTime);
+            XrView views[2];
+            locateViews(a, a.setTime, views);
+            widenView(views[0]);
+            widenView(views[1]);
+            a.setFrame = frameInfo(a, views, a.setTime);
+            a.setFrame.eyeBudgetMs = period / 1e6f - kTimewarpCompositeMs;  // one eye per refresh, beside the composites
+            vr::setSceneSet(a.renderSet);
+            vr::beginFrame(a.setFrame);
+            if (gBooted) port_vi_retrace();  // the game starts its next frame now
+            vr::renderEyeScene(0, a.setFrame);
+            a.renderDue = true;
+        } else {
+            // Second step: the right eye, for the same display time with the
+            // freshest prediction of it.
+            XrView views[2];
+            locateViews(a, a.setTime, views);
+            widenView(views[1]);
+            vr::FrameInfo frame = a.setFrame;
+            frame.eyes[1] = eyeInfo(a, views[1], 1);
+            vr::renderEyeScene(1, frame);
+            a.sceneDone = a.renderSet;
+            a.renderSet ^= 1;
+            a.renderDue = false;
+        }
+        if (a.sceneShown >= 0) {
+            compositeShown(a, fs.predictedDisplayTime);
+        }
     } else if (paired && !a.renderDue) {
         // First step.  The set finished on the last refresh goes up now.
         if (a.renderedSet >= 0) {
@@ -1576,9 +1872,11 @@ void renderFrame(App& a) {
         vr::FrameInfo frame = frameInfo(a, views, fs.predictedDisplayTime);
         frame.eyeBudgetMs = period / 2e6f;  // both eyes in one refresh
         vr::beginFrame(frame);
-        renderPair(a, a.renderSet, frame, views);
-        a.shownSet = a.renderSet;
-        a.renderSet ^= 1;
+        // Both eyes in one refresh need no second set (each swapchain cycles
+        // its own images); SteamVR logs every change of an eye's swapchain.
+        renderPair(a, 0, frame, views);
+        a.shownSet = 0;
+        a.renderSet = 1;  // for the paired refreshes
     }
 
     XrCompositionLayerProjectionView projViews[2] = {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
@@ -1749,6 +2047,7 @@ void renderFrame(App& a) {
     }
 }
 
+#ifdef __ANDROID__
 // Android's all files access (MANAGE_EXTERNAL_STORAGE), through JNI (the app
 // has no Java code): whether the app has it, and opening the settings page
 // where the player grants it.
@@ -1773,7 +2072,6 @@ bool hasAllFilesAccess(App& a) {
     if (cls) env->DeleteLocalRef(cls);
     return granted;
 }
-
 void requestAllFilesAccess(App& a) {
     JNIEnv* env = jniEnv(a);
     if (!env) return;
@@ -1808,12 +2106,19 @@ void requestAllFilesAccess(App& a) {
     port_log("setup: all files access settings %s", ok ? "opened" : "could not be opened");
 }
 
+#else
+// Linux has no storage permission: the setup screen searches the home folder.
+bool hasAllFilesAccess(App&) { return true; }
+void requestAllFilesAccess(App&) {}
+#endif
+
 void bootGame(const std::string& dataRoot) {
     port_log("game files: %s", dataRoot.c_str());
     gBooted = true;
     port_boot(dataRoot.c_str(), gSaveRoot.c_str());
 }
 
+#ifdef __ANDROID__
 void onAppCmd(android_app* app, int32_t cmd) {
     (void)app;
     switch (cmd) {
@@ -1831,19 +2136,35 @@ void onAppCmd(android_app* app, int32_t cmd) {
     }
 }
 
-}  // namespace
+// Android's events; true when the activity is being destroyed.
+bool pollPlatform(App& a) {
+    int events;
+    android_poll_source* source;
+    int timeout = a.sessionRunning ? 0 : 50;
+    while (ALooper_pollOnce(timeout, nullptr, &events, (void**)&source) >= 0) {
+        if (source) {
+            source->process(a.android, source);
+        }
+        if (a.android->destroyRequested) {
+            break;
+        }
+        timeout = 0;
+    }
+    return a.android->destroyRequested;
+}
+#else
+bool pollPlatform(App& a) {
+    if (!a.sessionRunning) {
+        usleep(50000);  // the runtime has not started the session yet
+    }
+    return false;
+}
+#endif
 
-extern "C" __attribute__((visibility("default"))) void port_android_main(android_app* app, uintptr_t windowBase, size_t windowSize) {
-    PortHostAllocScope scope;
-    App& a = gApp;
-    a.android = app;
-    app->onAppCmd = onAppCmd;
-    port_mem_set_reserved_window(windowBase, windowSize);
-
-    // Cooked game data is pushed to the app's external files dir; saves go to
-    // internal storage.
-    std::string ext = app->activity->externalDataPath ? app->activity->externalDataPath : "/sdcard/Android/data/com.galaxy.quest/files";
-    std::string saveRoot = std::string(app->activity->internalDataPath) + "/nand";
+// The app after its platform's start: ext holds the game files, settings and
+// logs, internal the saves and the shader cache.
+void runApp(App& a, const std::string& ext, const std::string& internal) {
+    std::string saveRoot = internal + "/nand";
     mkdir(saveRoot.c_str(), 0770);
 
     port_log_file((ext + "/petari_log.txt").c_str());
@@ -1865,7 +2186,7 @@ extern "C" __attribute__((visibility("default"))) void port_android_main(android
     initInstance(a);
     initActions(a);
     initSession(a);
-    gpu::setShaderCachePath((std::string(app->activity->internalDataPath) + "/shaders.bin").c_str());
+    gpu::setShaderCachePath((internal + "/shaders.bin").c_str());
     vr::init();
     initUiLayers(a);
     initPerfMetrics(a);
@@ -1897,18 +2218,9 @@ extern "C" __attribute__((visibility("default"))) void port_android_main(android
     }
 
     bool quit = false;
-    while (!quit && !app->destroyRequested) {
-        int events;
-        android_poll_source* source;
-        int timeout = a.sessionRunning ? 0 : 50;
-        while (ALooper_pollOnce(timeout, nullptr, &events, (void**)&source) >= 0) {
-            if (source) {
-                source->process(app, source);
-            }
-            if (app->destroyRequested) {
-                break;
-            }
-            timeout = 0;
+    while (!quit) {
+        if (pollPlatform(a)) {
+            break;
         }
         handleEvents(a, quit);
         if (!gBooted) {
@@ -1932,5 +2244,46 @@ extern "C" __attribute__((visibility("default"))) void port_android_main(android
         }
     }
     port_log("exiting");
-    exit(0);
+    // Not exit(): with glibc the static destructors wait forever on the
+    // condition variables the parked game threads sleep on.
+    fflush(nullptr);
+    _exit(0);
 }
+
+}  // namespace
+
+#ifdef __ANDROID__
+extern "C" __attribute__((visibility("default"))) void port_android_main(android_app* app, uintptr_t windowBase, size_t windowSize) {
+    PortHostAllocScope scope;
+    App& a = gApp;
+    a.android = app;
+    app->onAppCmd = onAppCmd;
+    port_mem_set_reserved_window(windowBase, windowSize);
+
+    // Cooked game data is pushed to the app's external files dir; saves go to
+    // internal storage.
+    std::string ext = app->activity->externalDataPath ? app->activity->externalDataPath : "/sdcard/Android/data/com.galaxy.quest/files";
+    runApp(a, ext, app->activity->internalDataPath);
+}
+#else
+// Linux: everything lives in $GALAXYQUEST_HOME, else
+// $XDG_DATA_HOME/GalaxyQuest (~/.local/share/GalaxyQuest).
+extern "C" void port_linux_main(uintptr_t windowBase, size_t windowSize) {
+    PortHostAllocScope scope;
+    port_mem_set_reserved_window(windowBase, windowSize);
+    std::string dir;
+    const char* own = getenv("GALAXYQUEST_HOME");
+    if (own && *own) {
+        dir = own;
+    } else {
+        const char* xdg = getenv("XDG_DATA_HOME");  // only an absolute one counts (XDG spec)
+        const char* home = getenv("HOME");
+        std::string data = xdg && xdg[0] == '/' ? xdg : std::string(home ? home : ".") + "/.local/share";
+        dir = data + "/GalaxyQuest";
+    }
+    for (size_t i = 1; i <= dir.size(); i++) {  // with its parents
+        if (i == dir.size() || dir[i] == '/') mkdir(dir.substr(0, i).c_str(), 0700);
+    }
+    runApp(gApp, dir, dir);
+}
+#endif

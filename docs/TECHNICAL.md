@@ -460,6 +460,73 @@ In the diorama:
   tabs are tables of rows over those keys (a switch, a stepper or a
   slider). The panel writes only the lines of the settings changed on it.
 
+## Steam Frame (Linux)
+
+The same code runs natively on Valve's Steam Frame (SteamOS, arm64, SteamVR);
+[ANLEITUNG-STEAM-FRAME.md](../ANLEITUNG-STEAM-FRAME.md) has the player's
+steps (in German).
+
+- One executable, `galaxyquest`, linked at 0x98000000 (libgame.so's slot on
+  Android). `platform/linux/main.c` reserves the rest of the window
+  0x80000000-0xE0010000 from `.preinit_array`, before any library's
+  constructor can start the heap there, and runs the bring-up runner with
+  `--headless <data root> <save root> [s]`. It is cross-compiled with clang
+  against Valve's Steam Runtime 4 arm64 SDK sysroot (`build_linux.sh`,
+  `cmake/steamrt4-arm64.cmake`).
+- The OpenXR loader and the `libjsoncpp.so.26` it needs (SteamOS has .25)
+  ship next to the executable and are found through an RPATH: unlike a
+  RUNPATH it also covers the loader's own dependency. Steam runs a native
+  non-Steam shortcut on the host, not in the Steam Linux Runtime.
+- Graphics: EGL on Mesa's surfaceless platform (the Frame's GL is zink on
+  Turnip), handed to SteamVR with `XR_MNDX_egl_enable`. SteamVR's GLES
+  swapchains are `GL_SRGB8_ALPHA8` with one mip level (the screen layer's
+  mipmaps are ignored); without `GL_RGBA16F` and depth formats SpaceWarp stays
+  off.
+- Refresh rate: SteamVR's `XR_FB_display_refresh_rate` lists only the rate the
+  display runs at and accepts only that one. SteamVR picks it per app from its
+  settings (`steam.app.<id>.preferredRefreshRate`, or
+  `system.generated.openxr.galaxyquest.galaxyquest` when not started from
+  Steam): 120 Hz gives the paired mode of `renderFrame`.
+- Timewarp: SteamVR shows an eye image as it was rendered, where Meta's
+  compositor turns it to the head's pose of the refresh it goes out on. In
+  the paired mode each game frame stayed on for two refreshes as rendered,
+  so the view stepped at 60 Hz while the head turned: a smear on every head
+  movement. So the app does it (`timewarp`, on by default): the paired
+  refreshes render the game frame's eyes into one of two scene sets
+  (`vr::renderEyeScene`, one eye a refresh as before), and every refresh
+  composites the set finished last into the eye images for that refresh's
+  pose (`vr::compositeEye`): the composite's full-screen triangle carries a
+  homography (`uWarp`) from the image's uv to the scene's, a rotation from
+  the rendered eye to the shown one between the two fields of view. Only
+  the rotation is made up for; the eyes' few millimetres of travel are not.
+  `PETARI_XRSIM_WARP=<deg>` checks it in the headless simulator against a
+  picture rendered at the turned pose.
+- Input: the Frame's controllers through `XR_VALVE_frame_controller_interaction`
+  (`/interaction_profiles/valve/frame_controller_valve`, and its older name
+  `.../frame_controller`; the runtime accepts their paths only with the
+  extension enabled): A, B, X, Y and Menu on the right, a D-pad and View on
+  the left. The D-pad works as the right stick does. A flick of either
+  controller shakes the Wii Remote or the Nunchuk: its speed (from the
+  runtime's velocities, else from the last pose) or a quick turn of the
+  wrist.
+- Audio: ALSA's `default` device (PipeWire on SteamOS) at 48 kHz, fed by a
+  thread that blocks in `snd_pcm_writei`, so the device paces the ring as
+  AAudio's callback does on Android.
+- What glibc and libstdc++ changed: libstdc++'s `<cstdio>` #undefs compat.h's
+  printf renames (compat.h now includes it first); libstdc++'s deque frees
+  and allocates its nodes as it goes, where libc++ recycles its blocks, so
+  host queues filled on game threads allocate inside a `PortHostAllocScope`
+  (`dvd.cpp`, `ai_dsp.cpp`); glibc's `pthread_cond_destroy` waits for the
+  threads parked on a condition variable, so the app leaves with `_exit`;
+  `MR::isNan` no longer relies on MSL's numbering of `__fpclassifyf`'s
+  classes; `-fno-builtin-wcslen` keeps clang from turning the 16-bit
+  `port_wcslen` into a call to the C library's 32-bit `wcslen`.
+- Files: game data, settings, log, saves and shader cache live in
+  `~/.local/share/GalaxyQuest` (`$GALAXYQUEST_HOME` overrides it). The setup
+  screen also searches `/run/media` (SD cards, USB sticks). The disc layer
+  keeps every file open once read (2,400 files), so `main` raises the
+  open-file soft limit.
+
 ## Development tools
 
 `tools/run_headless.sh <seconds> [--no-push]` pushes the build and boots it

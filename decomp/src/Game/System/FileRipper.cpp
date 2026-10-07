@@ -78,6 +78,9 @@ void* FileRipper::loadToMainRAM(const char* fpath, u8* dest, bool decompress, JK
             alloced = true;
         }
         if (!dest) {
+#ifdef TARGET_PC
+            OSReport("FileRipper: no room for %s (%u bytes unpacked)\n", fpath, decompressedSize);
+#endif
             return 0;
         }
     } else {
@@ -87,6 +90,9 @@ void* FileRipper::loadToMainRAM(const char* fpath, u8* dest, bool decompress, JK
             alloced = true;
         }
         if (!dest) {
+#ifdef TARGET_PC
+            OSReport("FileRipper: no room for %s (%u bytes)\n", fpath, fsize);
+#endif
             return 0;
         }
     }

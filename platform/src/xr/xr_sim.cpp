@@ -119,6 +119,8 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
         eye.view = xm::inversePose(q, offset);
         const float r = 48.0f * 3.14159265f / 180.0f;
         eye.proj = xm::projectionFov(-r, r, r, -r, vr::kNearZ, vr::kFarZ);
+        eye.tanLeft = eye.tanDown = -tanf(r);
+        eye.tanRight = eye.tanUp = tanf(r);
         eye.width = kW;
         eye.height = kH;
     }
@@ -175,8 +177,29 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
             vr::setAimLength(onPanel);
         }
         vr::beginFrame(fi);
-        for (int e = 0; e < 2; e++) {
-            sUsed = vr::renderEye(e, fi, sFbo[e], kW, kH);
+        // PETARI_XRSIM_WARP=<deg>: the app's timewarp, as at 120 Hz on
+        // SteamVR: the eyes are rendered for the head's pose and composited
+        // for the head turned that much further (yaw). Compared with a shot
+        // rendered at that yaw (PETARI_XRHEAD), only the borders and close
+        // things (the eyes moved a little) should differ.
+        static const float sWarpDeg = getenv("PETARI_XRSIM_WARP") ? (float)atof(getenv("PETARI_XRSIM_WARP")) : 0.0f;
+        if (sWarpDeg != 0.0f) {
+            vr::FrameInfo shown = fi;
+            xm::Quat turned = mul(axisAngle({0, 1, 0}, sWarpDeg), q);
+            for (int e = 0; e < 2; e++) {
+                vr::EyeInfo& eye = shown.eyes[e];
+                eye.orientation = turned;
+                eye.position = xm::rotate(turned, {e == 0 ? -halfIpd : halfIpd, 0, 0});
+                eye.view = xm::inversePose(turned, eye.position);
+                vr::renderEyeScene(e, fi);
+            }
+            for (int e = 0; e < 2; e++) {
+                sUsed = vr::compositeEye(e, 0, shown, sFbo[e], kW, kH);
+            }
+        } else {
+            for (int e = 0; e < 2; e++) {
+                sUsed = vr::renderEye(e, fi, sFbo[e], kW, kH);
+            }
         }
         if (sLayers) {
             for (int k : vr::kUiLayerOrder) {
@@ -211,6 +234,47 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
         glFinish();
         port_perf_gpu_wait(port_host_time_ns() - t0);
         return;
+    }
+    if (getenv("PETARI_XRSIM_WARP")) {
+        // The timewarp's left eye against the left eye rendered at the turned
+        // pose, over the middle half of the image (the borders show what the
+        // first picture did not have): mean difference per channel, and the
+        // share of pixels more than 24 levels off.
+        static GLuint sCheckTex = 0, sCheckFbo = 0;
+        if (!sCheckTex) {
+            glGenTextures(1, &sCheckTex);
+            glBindTexture(GL_TEXTURE_2D, sCheckTex);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_SRGB8_ALPHA8, kW, kH);
+            glGenFramebuffers(1, &sCheckFbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, sCheckFbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sCheckTex, 0);
+        }
+        vr::FrameInfo direct = fi;
+        xm::Quat turned = mul(axisAngle({0, 1, 0}, (float)atof(getenv("PETARI_XRSIM_WARP"))), q);
+        direct.eyes[0].orientation = turned;
+        direct.eyes[0].position = xm::rotate(turned, {-halfIpd, 0, 0});
+        direct.eyes[0].view = xm::inversePose(turned, direct.eyes[0].position);
+        vr::renderEye(0, direct, sCheckFbo, kW, kH);
+        int x0 = kW / 4, y0 = kH / 4, w = kW / 2, h = kH / 2;
+        std::vector<unsigned char> a((size_t)w * h * 4), b((size_t)w * h * 4);
+        glBindFramebuffer(GL_FRAMEBUFFER, sFbo[0]);
+        glReadPixels(x0, y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, a.data());
+        glBindFramebuffer(GL_FRAMEBUFFER, sCheckFbo);
+        glReadPixels(x0, y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, b.data());
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        double sum = 0;
+        size_t off = 0;
+        for (size_t i = 0; i < a.size(); i += 4) {
+            int d = 0;
+            for (int c = 0; c < 3; c++) {
+                int v = abs((int)a[i + c] - (int)b[i + c]);
+                sum += v;
+                d = v > d ? v : d;
+            }
+            off += d > 24;
+        }
+        port_log("xrsim: timewarp vs rendered turned: mean difference %.2f, %.1f%% of pixels over 24", sum / (a.size() / 4 * 3),
+                 100.0 * off / (a.size() / 4));
     }
     int rw = sUsed.width, rh = sUsed.height;
     std::vector<unsigned char> px((size_t)rw * 2 * rh * 4), eyePx((size_t)rw * rh * 4);
