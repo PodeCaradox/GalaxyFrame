@@ -10,12 +10,95 @@
 
 # GalaxyQuest
 
-> **Steam Frame:** this is a fork of
-> [bigmak94/GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) that also
-> runs natively on Valve's Steam Frame (SteamOS, arm64). Installation and
-> controls there: [STEAM-FRAME.md](STEAM-FRAME.md) (English),
-> [ANLEITUNG-STEAM-FRAME.md](ANLEITUNG-STEAM-FRAME.md) (Deutsch).
-> Everything below is the original project's README.
+## Steam Frame port
+
+This is a fork of [bigmak94/GalaxyQuest](https://github.com/bigmak94/GalaxyQuest)
+that also runs natively on Valve's **Steam Frame** (SteamOS, arm64).
+Installation, controls and troubleshooting: [STEAM-FRAME.md](STEAM-FRAME.md)
+(English), [ANLEITUNG-STEAM-FRAME.md](ANLEITUNG-STEAM-FRAME.md) (Deutsch).
+
+> **Notice.** This is an unofficial, non-commercial fan project. It is not
+> affiliated with, endorsed by or sponsored by Nintendo. Super Mario Galaxy
+> and all related names are trademarks of Nintendo. This repository and its
+> releases contain **no game data**: no disc image, no textures, models,
+> sounds, music or movies. To play you need your own, legally obtained
+> Super Mario Galaxy disc, which you convert yourself. Do not share
+> converted game files, and do not ask for them here.
+>
+> Rights holders who want something removed: please open an issue on this
+> repository, and it will be taken down promptly.
+
+### Install
+
+Download `GalaxyQuest-SteamFrame-arm64.tar.gz` from the
+[Releases](../../releases), extract it into your home folder on the Frame
+(desktop mode) and run, with the path to your own disc image:
+
+```
+~/GalaxyQuest/install.sh ~/Downloads/SuperMarioGalaxy.iso
+```
+
+It extracts the disc with Dolphin (installed from Flathub if missing),
+converts the game files and adds the game to Steam. The guides above also
+describe installing from a PC over SSH.
+
+### Building it yourself
+
+You can build the Frame version from this repository instead of using the
+release. It is cross-compiled on a PC running Linux, or Windows with WSL2,
+against Valve's Steam Runtime 4 SDK for arm64.
+
+1. **Windows only:** open PowerShell and install Ubuntu in WSL2, then open
+   *Ubuntu 24.04* from the Start menu and do the rest there:
+
+   ```
+   wsl --install -d Ubuntu-24.04
+   ```
+
+2. Install the tools (CMake 3.24+, clang 16+, lld, Ninja):
+
+   ```
+   sudo apt update
+   sudo apt install git clang lld cmake ninja-build python3 curl
+   ```
+
+3. Download Valve's Steam Runtime 4 SDK sysroot for arm64 (about 1 GB):
+
+   ```
+   mkdir -p ~/steamrt4-arm64-sdk/sysroot && cd ~/steamrt4-arm64-sdk
+   curl -O https://repo.steampowered.com/steamrt4/images/latest-public-beta/com.valvesoftware.SteamRuntime.Sdk-arm64-steamrt4-sysroot.tar.gz
+   tar -xzf com.valvesoftware.SteamRuntime.Sdk-arm64-steamrt4-sysroot.tar.gz -C sysroot --exclude='./dev/*'
+   ```
+
+4. Get the source and build it. Keep it in the Linux home folder, not on a
+   Windows drive or a USB stick (they lose the executable bit):
+
+   ```
+   git clone https://github.com/PodeCaradox/GalaxyQuest-SteamFrame.git ~/GalaxyQuest
+   cd ~/GalaxyQuest
+   ARCH=arm64 STEAMRT4_ARM64_SYSROOT=~/steamrt4-arm64-sdk/sysroot ./build_linux.sh
+   ```
+
+   The first build takes a while; later ones only rebuild what changed. The
+   result is `build-linux-arm64/GalaxyQuest-SteamFrame-arm64.tar.gz`, the
+   same kind of archive as the release (program, the OpenXR loader and
+   jsoncpp next to it, `install.sh`, the converter and the guides).
+
+5. Install it on the Frame as above. From the PC over SSH (developer mode
+   on, with a password for the user `steamos` set in the developer
+   settings):
+
+   ```
+   scp build-linux-arm64/GalaxyQuest-SteamFrame-arm64.tar.gz smg.iso steamos@frame.local:
+   ssh steamos@frame.local "tar -xzf GalaxyQuest-SteamFrame-arm64.tar.gz && ~/GalaxyQuest/install.sh ~/smg.iso && rm ~/smg.iso"
+   ```
+
+What the port changes compared with the Quest version is described in
+[docs/TECHNICAL.md](docs/TECHNICAL.md) under "Steam Frame (Linux)".
+
+---
+
+*Everything below is the original project's README.*
 
 **Play Super Mario Galaxy in virtual reality, natively on Meta Quest 2 and 3.**
 
